@@ -1,0 +1,19 @@
+{
+  "name": "d3nengineer/stream-encryption-psr7",
+  "description": "PSR-7 stream decorators for media encryption (AES-CBC + HKDF + HMAC)",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Infra\\StreamEncryption\\": "src/"
+    }
+  },
+  "require": {
+    "php": "^8.2",
+    "psr/http-message": "^1.0 || ^2.0",
+    "guzzlehttp/psr7": "^2.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^13.0"
+  }
+}
