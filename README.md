@@ -71,3 +71,77 @@ $plaintext = $decryptor->decrypt($payload, $mediaKey, MediaType::IMAGE);
 
 - Encryption materializes the full encrypted payload in memory once and reuses it for subsequent reads.
 - For very large payloads, account for full-buffer memory usage.
+
+## DecryptingStream
+
+`Infra\StreamEncryption\Stream\DecryptingStream` lazily reads an encrypted PSR-7 stream,
+authenticates and decrypts the payload with `Decryptor`, and exposes plaintext bytes as a read-only PSR-7 stream.
+
+### Constructor
+
+```php
+new DecryptingStream(
+    StreamInterface $source,
+    string $mediaKey,
+    MediaType $mediaType,
+    Decryptor $decryptor = new Decryptor(),
+)
+```
+
+- `source`: encrypted payload stream containing `ciphertext || mac`.
+- `mediaKey`: 32-byte media key used for HKDF expansion.
+- `mediaType`: media context (`IMAGE`, `VIDEO`, `AUDIO`, `DOCUMENT`).
+- `decryptor`: optional custom decryptor implementation.
+
+### Usage
+
+```php
+<?php
+
+use GuzzleHttp\Psr7\Utils;
+use Infra\StreamEncryption\Crypto\Encryptor;
+use Infra\StreamEncryption\Enum\MediaType;
+use Infra\StreamEncryption\Stream\DecryptingStream;
+
+$mediaKey = random_bytes(32);
+$encryptor = new Encryptor();
+$result = $encryptor->encrypt("binary\x00payload", $mediaKey, MediaType::IMAGE);
+
+$decryptingStream = new DecryptingStream(
+    Utils::streamFor($result->payload),
+    $mediaKey,
+    MediaType::IMAGE,
+);
+
+$plaintext = (string) $decryptingStream;
+```
+
+### Payload Format And Validation
+
+- Input bytes must be `ciphertext || mac`.
+- Integrity verification happens before decryption.
+- Media key and media type must match the payload that produced the ciphertext.
+- Crypto-layer exceptions are propagated unchanged so integrity and key failures stay explicit.
+
+### Source Ownership And Lifecycle
+
+- `DecryptingStream` owns the encrypted source stream lifecycle.
+- Calling `close()` closes both the internal plaintext stream and the encrypted source stream.
+- Calling `detach()` detaches the internal plaintext resource (if initialized) and also detaches the source stream.
+- Repeated `close()`/`detach()` calls are safe and idempotent.
+
+### Source Consumption Contract
+
+- Seekable source: `DecryptingStream` rewinds and decrypts from the beginning.
+- Non-seekable source: `DecryptingStream` decrypts remaining bytes from the current cursor position.
+- Pre-consumed or truncated non-seekable payloads can fail integrity validation because the full `ciphertext || mac` payload is no longer available.
+
+### Memory Tradeoff
+
+- Decryption materializes the full plaintext in memory once and reuses it for subsequent reads.
+- For very large payloads, account for full-buffer memory usage.
+
+### Diagnostics Stance
+
+- The library favors transparent exceptions and focused PHPUnit coverage over runtime logger coupling.
+- Constructor guards, source-read boundaries, and crypto failures remain explicit so diagnostics can be added later without changing control flow.
