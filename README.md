@@ -2,6 +2,56 @@
 
 PSR-7 stream decorators for media encryption (AES-CBC + HKDF + HMAC).
 
+## Recommended Entry Point: StreamFactory
+
+`Infra\StreamEncryption\Stream\StreamFactory` is the recommended ergonomic API for most consumers.
+It exposes one-line factory methods for encryption and decryption while still returning the same
+`EncryptingStream` and `DecryptingStream` decorators.
+
+### Usage
+
+```php
+<?php
+
+use GuzzleHttp\Psr7\Utils;
+use Infra\StreamEncryption\Enum\MediaType;
+use Infra\StreamEncryption\Stream\StreamFactory;
+
+$factory = new StreamFactory();
+$mediaKey = random_bytes(32);
+
+$encrypted = $factory->encrypt(
+    Utils::streamFor("binary\x00payload"),
+    $mediaKey,
+    MediaType::IMAGE,
+);
+
+$decrypted = $factory->decrypt(
+    Utils::streamFor((string) $encrypted),
+    $mediaKey,
+    MediaType::IMAGE,
+);
+```
+
+### Optional Service Injection
+
+```php
+<?php
+
+use Infra\StreamEncryption\Crypto\Decryptor;
+use Infra\StreamEncryption\Crypto\Encryptor;
+use Infra\StreamEncryption\Stream\StreamFactory;
+
+$factory = new StreamFactory(new Encryptor(), new Decryptor());
+```
+
+### Behavioral Notes
+
+- Factory methods are lazy and do not read source streams at construction time.
+- Factory methods do not add normalization, buffering, or exception wrapping.
+- Returned objects preserve the same lifecycle, source-consumption, exception, and memory tradeoffs documented for `EncryptingStream` and `DecryptingStream`.
+- Diagnostics stance is unchanged: explicit exceptions and focused tests over runtime logger coupling.
+
 ## EncryptingStream
 
 `Infra\StreamEncryption\Stream\EncryptingStream` lazily reads a source PSR-7 stream,
