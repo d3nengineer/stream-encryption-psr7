@@ -12,6 +12,8 @@ use Infra\StreamEncryption\Enum\MediaType;
 use Infra\StreamEncryption\Exception\IntegrityException;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
 use Infra\StreamEncryption\Stream\DecryptingStream;
+use Infra\StreamEncryption\Stream\EncryptingStream;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -353,6 +355,29 @@ final class DecryptingStreamTest extends TestCase
         $this->expectException(InvalidMediaKeyException::class);
 
         $stream->read(1);
+    }
+
+    #[DataProvider('mediaTypeAndFixtureProvider')]
+    public function testEndToEndRoundTripAcrossMediaTypes(MediaType $mediaType, string $plaintext): void
+    {
+        $mediaKey = random_bytes(32);
+        $encryptingStream = new EncryptingStream(Utils::streamFor($plaintext), $mediaKey, $mediaType);
+        $decryptingStream = new DecryptingStream(Utils::streamFor((string) $encryptingStream), $mediaKey, $mediaType);
+
+        $this->assertSame($plaintext, (string) $decryptingStream);
+    }
+
+    /**
+     * @return array<string, array{0: MediaType, 1: string}>
+     */
+    public static function mediaTypeAndFixtureProvider(): array
+    {
+        return [
+            'image-small-binary' => [MediaType::IMAGE, "\x89PNG\r\n\x1A\n\x00\x00\x00\rIHDR"],
+            'video-random-chunk' => [MediaType::VIDEO, random_bytes(128)],
+            'audio-with-null-bytes' => [MediaType::AUDIO, "ID3\x00\x10\xFF\x00audio"],
+            'document-utf8-and-binary' => [MediaType::DOCUMENT, "PDF\x00\x01body\n\xFF\xFE"],
+        ];
     }
 
     private function encrypt(string $plaintext, string $mediaKey, MediaType $mediaType): string
