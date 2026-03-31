@@ -12,6 +12,8 @@ use RuntimeException;
 
 final class DecryptingStream extends AbstractCryptoStream
 {
+    private ?string $plaintext = null;
+
     public function __construct(
         private readonly StreamInterface $source,
         private readonly string $mediaKey,
@@ -39,19 +41,31 @@ final class DecryptingStream extends AbstractCryptoStream
 
     protected function createInternalStream(): StreamInterface
     {
-        return Utils::streamFor($this->decryptSourcePayload());
+        return Utils::streamFor($this->getOrCreatePlaintext());
     }
 
-    private function decryptSourcePayload(): string
+    private function getOrCreatePlaintext(): string
     {
+        if ($this->plaintext !== null) {
+            return $this->plaintext;
+        }
+
+        $payload = $this->readSourcePayload();
+        $this->plaintext = $this->decryptor->decrypt($payload, $this->mediaKey, $this->mediaType);
+
+        return $this->plaintext;
+    }
+
+    private function readSourcePayload(): string
+    {
+        if (!$this->source->isReadable()) {
+            throw new RuntimeException('Source stream is not readable.');
+        }
+
         if ($this->source->isSeekable()) {
             $this->source->rewind();
         }
 
-        return $this->decryptor->decrypt(
-            $this->source->getContents(),
-            $this->mediaKey,
-            $this->mediaType,
-        );
+        return $this->source->getContents();
     }
 }
