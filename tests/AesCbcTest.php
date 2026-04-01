@@ -6,6 +6,7 @@ namespace Infra\StreamEncryption\Tests;
 
 use Infra\StreamEncryption\Crypto\AesCbc;
 use Infra\StreamEncryption\Exception\DecryptionException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class AesCbcTest extends TestCase
@@ -37,12 +38,25 @@ final class AesCbcTest extends TestCase
         $this->assertSame($binaryPlaintext, $aesCbc->decrypt($binaryCiphertext, $cipherKey, $iv));
     }
 
-    public function testItThrowsOnInvalidCiphertext(): void
+    #[DataProvider('malformedCiphertextProvider')]
+    public function testItThrowsOnMalformedCiphertextBoundaries(string $scenarioId, string $ciphertext): void
     {
         $aesCbc = new AesCbc();
 
         $this->expectException(DecryptionException::class);
 
-        $aesCbc->decrypt('not-a-valid-ciphertext', random_bytes(32), random_bytes(16));
+        $aesCbc->decrypt($ciphertext, random_bytes(32), random_bytes(16));
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function malformedCiphertextProvider(): array
+    {
+        return [
+            'DEBUG[aescbc-invalid/ascii-junk]' => ['aescbc-invalid/ascii-junk', 'not-a-valid-ciphertext'],
+            'DEBUG[aescbc-invalid/truncated-single-byte]' => ['aescbc-invalid/truncated-single-byte', "\x01"],
+            'DEBUG[aescbc-invalid/non-block-len-17]' => ['aescbc-invalid/non-block-len-17', random_bytes(17)],
+        ];
     }
 }

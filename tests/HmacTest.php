@@ -6,6 +6,7 @@ namespace Infra\StreamEncryption\Tests;
 
 use Infra\StreamEncryption\Crypto\Hmac;
 use Infra\StreamEncryption\Exception\IntegrityException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class HmacTest extends TestCase
@@ -49,5 +50,50 @@ final class HmacTest extends TestCase
         $this->expectException(IntegrityException::class);
 
         $hmac->verify($ciphertext, $tamperedMac, $macKey);
+    }
+
+    #[DataProvider('invalidVerifyBoundariesProvider')]
+    public function testItFailsForMalformedMacBoundaries(
+        string $scenarioId,
+        string $ciphertext,
+        string $mac,
+        string $macKey,
+    ): void {
+        $hmac = new Hmac();
+
+        $this->expectException(IntegrityException::class);
+
+        $hmac->verify($ciphertext, $mac, $macKey);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: string, 3: string}>
+     */
+    public static function invalidVerifyBoundariesProvider(): array
+    {
+        $ciphertext = random_bytes(64);
+        $macKey = random_bytes(32);
+        $validMac = (new Hmac())->sign($ciphertext, $macKey);
+
+        return [
+            'DEBUG[hmac-invalid/mac-empty]' => [
+                'hmac-invalid/mac-empty',
+                $ciphertext,
+                '',
+                $macKey,
+            ],
+            'DEBUG[hmac-invalid/mac-truncated-16]' => [
+                'hmac-invalid/mac-truncated-16',
+                $ciphertext,
+                substr($validMac, 0, 16),
+                $macKey,
+            ],
+            'DEBUG[hmac-invalid/wrong-key-size-16]' => [
+                'hmac-invalid/wrong-key-size-16',
+                $ciphertext,
+                $validMac,
+                random_bytes(16),
+            ],
+        ];
     }
 }
