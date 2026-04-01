@@ -53,7 +53,6 @@ final class HmacTest extends TestCase
 
     #[DataProvider('invalidVerifyBoundariesProvider')]
     public function testItFailsForMalformedMacBoundaries(
-        string $scenarioId,
         string $ciphertext,
         string $mac,
         string $macKey,
@@ -66,7 +65,7 @@ final class HmacTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: string, 2: string, 3: string}>
+     * @return array<string, array{0: string, 1: string, 2: string}>
      */
     public static function invalidVerifyBoundariesProvider(): array
     {
@@ -75,20 +74,17 @@ final class HmacTest extends TestCase
         $validMac = (new Hmac())->sign($ciphertext, $macKey);
 
         return [
-            'DEBUG[hmac-invalid/mac-empty]' => [
-                'hmac-invalid/mac-empty',
+            'mac-empty' => [
                 $ciphertext,
                 '',
                 $macKey,
             ],
-            'DEBUG[hmac-invalid/mac-truncated-16]' => [
-                'hmac-invalid/mac-truncated-16',
+            'mac-truncated-16' => [
                 $ciphertext,
                 substr($validMac, 0, 16),
                 $macKey,
             ],
-            'DEBUG[hmac-invalid/wrong-key-size-16]' => [
-                'hmac-invalid/wrong-key-size-16',
+            'wrong-key-size-16' => [
                 $ciphertext,
                 $validMac,
                 random_bytes(16),

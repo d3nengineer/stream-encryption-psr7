@@ -39,7 +39,7 @@ final class MediaKeyExpanderTest extends TestCase
     }
 
     #[DataProvider('invalidMediaKeyLengthProvider')]
-    public function testItRejectsMediaKeysOutside32Bytes(string $scenarioId, string $mediaKey): void
+    public function testItRejectsMediaKeysOutside32Bytes(string $mediaKey): void
     {
         $expander = new MediaKeyExpander();
 
@@ -59,14 +59,14 @@ final class MediaKeyExpanderTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: string}>
+     * @return array<string, array{0: string}>
      */
     public static function invalidMediaKeyLengthProvider(): array
     {
         return [
-            'DEBUG[expand-key-invalid/empty-0]' => ['expand-key-invalid/empty-0', ''],
-            'DEBUG[expand-key-invalid/short-31]' => ['expand-key-invalid/short-31', random_bytes(31)],
-            'DEBUG[expand-key-invalid/long-33]' => ['expand-key-invalid/long-33', random_bytes(33)],
+            'empty-0' => [''],
+            'short-31' => [random_bytes(31)],
+            'long-33' => [random_bytes(33)],
         ];
     }
 }

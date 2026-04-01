@@ -24,7 +24,7 @@ final class AesCbcTest extends TestCase
     }
 
     #[DataProvider('malformedCiphertextProvider')]
-    public function testItThrowsOnMalformedCiphertextBoundaries(string $scenarioId, string $ciphertext): void
+    public function testItThrowsOnMalformedCiphertextBoundaries(string $ciphertext): void
     {
         $aesCbc = new AesCbc();
 
@@ -34,14 +34,14 @@ final class AesCbcTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: string}>
+     * @return array<string, array{0: string}>
      */
     public static function malformedCiphertextProvider(): array
     {
         return [
-            'DEBUG[aescbc-invalid/ascii-junk]' => ['aescbc-invalid/ascii-junk', 'not-a-valid-ciphertext'],
-            'DEBUG[aescbc-invalid/truncated-single-byte]' => ['aescbc-invalid/truncated-single-byte', "\x01"],
-            'DEBUG[aescbc-invalid/non-block-len-17]' => ['aescbc-invalid/non-block-len-17', random_bytes(17)],
+            'ascii-junk' => ['not-a-valid-ciphertext'],
+            'truncated-single-byte' => ["\x01"],
+            'non-block-len-17' => [random_bytes(17)],
         ];
     }
 
