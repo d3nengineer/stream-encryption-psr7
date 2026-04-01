@@ -102,6 +102,40 @@ final class DecryptingStreamTest extends TestCase
         $this->assertIsArray($stream->getMetadata());
     }
 
+    public function testCompatibilityMatrixForDelegatedMethodsInitializesOnceAndStaysStable(): void
+    {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('compatibility-matrix-plaintext', $mediaKey, MediaType::IMAGE);
+        $source = $this->createInstrumentedSourceStream($payload);
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
+
+        $this->assertSame(0, $source->rewindCalls, 'decrypting/tell precondition: no rewind before delegated calls');
+        $this->assertSame(0, $source->getContentsCalls, 'decrypting/tell precondition: no source reads before delegated calls');
+
+        $this->assertSame(0, $stream->tell(), 'decrypting/tell after first delegated call');
+        $this->assertTrue($stream->isReadable(), 'decrypting/isReadable should delegate to internal stream');
+        $this->assertTrue($stream->isSeekable(), 'decrypting/isSeekable should delegate to internal stream');
+        $this->assertSame(strlen('compatibility-matrix-plaintext'), $stream->getSize(), 'decrypting/getSize should match plaintext size');
+        $this->assertIsArray($stream->getMetadata(), 'decrypting/getMetadata should return metadata array');
+        $this->assertNotNull($stream->getMetadata('uri'), 'decrypting/getMetadata(uri) should expose stream URI');
+
+        $prefix = $stream->read(5);
+        $this->assertSame('compa', $prefix, 'decrypting/read should return expected plaintext prefix');
+        $this->assertSame(5, $stream->tell(), 'decrypting/tell should move after read');
+        $this->assertFalse($stream->eof(), 'decrypting/eof should remain false before full consumption');
+
+        $stream->seek(0);
+        $this->assertSame(0, $stream->tell(), 'decrypting/seek should reset cursor');
+
+        $this->assertSame('compatibility-matrix-plaintext', $stream->getContents(), 'decrypting/getContents should return remaining plaintext');
+        $this->assertTrue($stream->eof(), 'decrypting/getContents should advance to eof');
+
+        $stream->rewind();
+        $this->assertFalse($stream->eof(), 'decrypting/rewind should clear eof state');
+        $this->assertSame(1, $source->rewindCalls, 'decrypting compatibility: source rewind should happen once');
+        $this->assertSame(1, $source->getContentsCalls, 'decrypting compatibility: source read should happen once');
+    }
+
     public function testCloseClosesSourceAndInternalStreamAndIsIdempotent(): void
     {
         $mediaKey = random_bytes(32);
@@ -172,6 +206,22 @@ final class DecryptingStreamTest extends TestCase
         $stream = new DecryptingStream($source, $mediaKey, MediaType::DOCUMENT);
 
         $this->assertSame('', (string) $stream);
+    }
+
+    public function testRepeatedReadCyclesReuseMaterializedPlaintext(): void
+    {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('repeatable-read-cycles', $mediaKey, MediaType::DOCUMENT);
+        $source = $this->createInstrumentedSourceStream($payload);
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::DOCUMENT);
+
+        $firstPrefix = $stream->read(9);
+        $stream->rewind();
+        $secondPrefix = $stream->read(9);
+
+        $this->assertSame($firstPrefix, $secondPrefix);
+        $this->assertSame(1, $source->rewindCalls);
+        $this->assertSame(1, $source->getContentsCalls);
     }
 
     public function testItHandlesEmptyPlaintext(): void
@@ -254,6 +304,34 @@ final class DecryptingStreamTest extends TestCase
         $this->assertSame($plaintext, (string) $stream);
     }
 
+    public function testGuzzleResourceBackedStreamsRemainCompatibleForDecryption(): void
+    {
+        $mediaKey = random_bytes(32);
+        $plaintext = 'resource-backed-decryption-stream';
+        $payload = $this->encrypt($plaintext, $mediaKey, MediaType::VIDEO);
+        $resource = fopen('php://temp', 'r+');
+        fwrite($resource, $payload);
+        rewind($resource);
+        $source = Utils::streamFor($resource);
+
+        $source->read(7);
+
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::VIDEO);
+
+        $this->assertSame($plaintext, (string) $stream);
+    }
+
+    public function testNonSeekableSourcesDecryptFromStartWhenCursorIsUntouched(): void
+    {
+        $mediaKey = random_bytes(32);
+        $plaintext = 'non-seekable-compatibility';
+        $payload = $this->encrypt($plaintext, $mediaKey, MediaType::AUDIO);
+        $source = new NoSeekStream(Utils::streamFor($payload));
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::AUDIO);
+
+        $this->assertSame($plaintext, (string) $stream);
+    }
+
     public function testNonSeekableSourcesDecryptRemainingBytesFromCurrentCursor(): void
     {
         $mediaKey = random_bytes(32);
@@ -314,6 +392,19 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
+    public function testItPropagatesTamperedCiphertextIntegrityFailuresForNoSeekSource(): void
+    {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('secret', $mediaKey, MediaType::IMAGE);
+        $payload[0] = $payload[0] ^ "\x01";
+        $source = new NoSeekStream(Utils::streamFor($payload));
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
+
+        $this->expectException(IntegrityException::class);
+
+        $stream->read(1);
+    }
+
     public function testItPropagatesTamperedMacIntegrityFailures(): void
     {
         $mediaKey = random_bytes(32);
@@ -353,6 +444,21 @@ final class DecryptingStreamTest extends TestCase
         $stream = new DecryptingStream(Utils::streamFor($payload), random_bytes(16), MediaType::IMAGE);
 
         $this->expectException(InvalidMediaKeyException::class);
+
+        $stream->read(1);
+    }
+
+    public function testReadAfterDetachFailsWhenEncryptedSourceIsNoLongerReadable(): void
+    {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('detach-lifecycle-check', $mediaKey, MediaType::IMAGE);
+        $source = $this->createInstrumentedSourceStream($payload);
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
+
+        $stream->detach();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Source stream is not readable.');
 
         $stream->read(1);
     }

@@ -52,6 +52,16 @@ $factory = new StreamFactory(new Encryptor(), new Decryptor());
 - Returned objects preserve the same lifecycle, source-consumption, exception, and memory tradeoffs documented for `EncryptingStream` and `DecryptingStream`.
 - Diagnostics stance is unchanged: explicit exceptions and focused tests over runtime logger coupling.
 
+### PSR-7 / Guzzle Compatibility Guarantees
+
+- Delegated PSR-7 methods (`read`, `getContents`, `seek`, `rewind`, `tell`, `eof`, `getSize`, `getMetadata`) are covered with compatibility-matrix tests for both encrypting and decrypting decorators.
+- Lazy materialization happens at first delegated read/delegation boundary and is reused for subsequent read cycles (`__toString()`, `read()`, `getContents()`, `rewind()` combinations).
+- Resource-backed Guzzle streams (`Utils::streamFor($resource)`) are supported and preserve seekable rewind semantics.
+- `NoSeekStream` interoperability is explicit:
+  - untouched cursor -> full payload compatibility;
+  - pre-consumed cursor -> remaining-bytes semantics (or integrity failure for decrypting when payload is incomplete).
+- `StreamFactory` entrypoints preserve the exact compatibility behavior of direct `EncryptingStream` / `DecryptingStream` usage.
+
 ## EncryptingStream
 
 `Infra\StreamEncryption\Stream\EncryptingStream` lazily reads a source PSR-7 stream,

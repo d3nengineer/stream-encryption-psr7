@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Infra\StreamEncryption\Tests;
 
+use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Stream;
 use GuzzleHttp\Psr7\Utils;
 use Infra\StreamEncryption\Crypto\Decryptor;
@@ -155,6 +156,50 @@ final class StreamFactoryTest extends TestCase
         $decryptedStream = $factory->decrypt(Utils::streamFor((string) $encryptedStream), $mediaKey, $mediaType);
 
         $this->assertSame($plaintext, (string) $decryptedStream);
+    }
+
+    public function testFactoryEncryptRemainsCompatibleWithResourceBackedStreams(): void
+    {
+        $mediaKey = random_bytes(32);
+        $plaintext = 'factory-resource-encrypt';
+        $resource = fopen('php://temp', 'r+');
+        fwrite($resource, $plaintext);
+        rewind($resource);
+        $source = Utils::streamFor($resource);
+        $source->read(4);
+        $factory = new StreamFactory();
+
+        $encrypted = $factory->encrypt($source, $mediaKey, MediaType::DOCUMENT);
+        $decrypted = (new Decryptor())->decrypt((string) $encrypted, $mediaKey, MediaType::DOCUMENT);
+
+        $this->assertSame($plaintext, $decrypted);
+    }
+
+    public function testFactoryDecryptRemainsCompatibleWithUntouchedNoSeekSources(): void
+    {
+        $mediaKey = random_bytes(32);
+        $plaintext = 'factory-noseek-decrypt';
+        $payload = (new Encryptor())->encrypt($plaintext, $mediaKey, MediaType::AUDIO)->payload;
+        $source = new NoSeekStream(Utils::streamFor($payload));
+        $factory = new StreamFactory();
+
+        $decrypted = $factory->decrypt($source, $mediaKey, MediaType::AUDIO);
+
+        $this->assertSame($plaintext, (string) $decrypted);
+    }
+
+    public function testFactoryEncryptHonorsNoSeekRemainingBytesSemantics(): void
+    {
+        $mediaKey = random_bytes(32);
+        $base = Utils::streamFor('factory-noseek-remaining');
+        $base->read(8);
+        $source = new NoSeekStream($base);
+        $factory = new StreamFactory();
+
+        $encrypted = $factory->encrypt($source, $mediaKey, MediaType::VIDEO);
+        $decrypted = (new Decryptor())->decrypt((string) $encrypted, $mediaKey, MediaType::VIDEO);
+
+        $this->assertSame('noseek-remaining', $decrypted);
     }
 
     /**
