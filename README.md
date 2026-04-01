@@ -54,3 +54,4 @@ composer check
 ## More Details
 
 Package behavior and operational guarantees that do not belong on the landing page live in [docs/usage.md](docs/usage.md).
+Maintainer-facing release steps live in [docs/release-checklist.md](docs/release-checklist.md).

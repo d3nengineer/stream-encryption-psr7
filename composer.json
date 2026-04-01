@@ -3,6 +3,13 @@
   "description": "PSR-7 stream decorators for media encryption (AES-CBC + HKDF + HMAC)",
   "type": "library",
   "license": "MIT",
+  "keywords": [
+    "psr-7",
+    "stream",
+    "encryption",
+    "aes-cbc",
+    "hmac"
+  ],
   "autoload": {
     "psr-4": {
       "Infra\\StreamEncryption\\": "src/"
