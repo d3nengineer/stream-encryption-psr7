@@ -15,6 +15,7 @@ use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
 use Infra\StreamEncryption\Stream\DecryptingStream;
 use Infra\StreamEncryption\Stream\EncryptingStream;
 use Infra\StreamEncryption\Stream\StreamFactory;
+use Infra\StreamEncryption\Tests\Support\InstrumentedTestStream;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
@@ -175,31 +176,51 @@ final class StreamFactoryTest extends TestCase
         $this->assertSame($plaintext, $decrypted);
     }
 
-    public function testFactoryDecryptRemainsCompatibleWithUntouchedNoSeekSources(): void
-    {
+    #[DataProvider('factoryWorkflowParityProvider')]
+    public function testFactoryWorkflowParityAcrossSourceAndCursorPermutations(
+        MediaType $mediaType,
+        string $plaintext,
+        string $encryptionSourceKind,
+        int $encryptionPreConsumedBytes,
+        string $decryptionSourceKind,
+        int $decryptionPreConsumedBytes,
+    ): void {
         $mediaKey = random_bytes(32);
-        $plaintext = 'factory-noseek-decrypt';
-        $payload = (new Encryptor())->encrypt($plaintext, $mediaKey, MediaType::AUDIO)->payload;
-        $source = new NoSeekStream(Utils::streamFor($payload));
         $factory = new StreamFactory();
 
-        $decrypted = $factory->decrypt($source, $mediaKey, MediaType::AUDIO);
+        $factoryEncryptedPayload = (string) $factory->encrypt(
+            $this->buildSourceForScenario($plaintext, $encryptionSourceKind, $encryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
+        $directEncryptedPayload = (string) new EncryptingStream(
+            $this->buildSourceForScenario($plaintext, $encryptionSourceKind, $encryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
 
-        $this->assertSame($plaintext, (string) $decrypted);
-    }
+        $decryptor = new Decryptor();
+        $this->assertSame(
+            $decryptor->decrypt($directEncryptedPayload, $mediaKey, $mediaType),
+            $decryptor->decrypt($factoryEncryptedPayload, $mediaKey, $mediaType),
+        );
 
-    public function testFactoryEncryptHonorsNoSeekRemainingBytesSemantics(): void
-    {
-        $mediaKey = random_bytes(32);
-        $base = Utils::streamFor('factory-noseek-remaining');
-        $base->read(8);
-        $source = new NoSeekStream($base);
-        $factory = new StreamFactory();
+        $payload = (new Encryptor())->encrypt($plaintext, $mediaKey, $mediaType)->payload;
+        $factoryDecryptedPlaintext = (string) $factory->decrypt(
+            $this->buildSourceForScenario($payload, $decryptionSourceKind, $decryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
+        $directDecryptedPlaintext = (string) new DecryptingStream(
+            $this->buildSourceForScenario($payload, $decryptionSourceKind, $decryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
 
-        $encrypted = $factory->encrypt($source, $mediaKey, MediaType::VIDEO);
-        $decrypted = (new Decryptor())->decrypt((string) $encrypted, $mediaKey, MediaType::VIDEO);
-
-        $this->assertSame('noseek-remaining', $decrypted);
+        $this->assertSame(
+            $directDecryptedPlaintext,
+            $factoryDecryptedPlaintext,
+        );
     }
 
     /**
@@ -215,6 +236,47 @@ final class StreamFactoryTest extends TestCase
         ];
     }
 
+    /**
+     * @return array<string, array{0: MediaType, 1: string, 2: string, 3: int, 4: string, 5: int}>
+     */
+    public static function factoryWorkflowParityProvider(): array
+    {
+        return [
+            'seekable-pristine-image-to-seekable' => [
+                MediaType::IMAGE,
+                "binary\x00image\x01payload",
+                'seekable',
+                0,
+                'seekable',
+                0,
+            ],
+            'seekable-preconsumed-document-to-seekable' => [
+                MediaType::DOCUMENT,
+                'document-source-with-prefix',
+                'seekable',
+                7,
+                'seekable',
+                0,
+            ],
+            'noseek-preconsumed-video-to-noseek' => [
+                MediaType::VIDEO,
+                'non-seekable-video-source',
+                'noseek',
+                4,
+                'noseek',
+                0,
+            ],
+            'noseek-pristine-audio-to-seekable' => [
+                MediaType::AUDIO,
+                "ID3\x00\x10\xFF\x00audio",
+                'noseek',
+                0,
+                'seekable',
+                0,
+            ],
+        ];
+    }
+
     private function readPrivateProperty(object $object, string $propertyName): mixed
     {
         $property = new ReflectionProperty($object, $propertyName);
@@ -222,42 +284,27 @@ final class StreamFactoryTest extends TestCase
         return $property->getValue($object);
     }
 
-    private function createInstrumentedStream(string $contents): InstrumentedFactorySourceStream
+    private function createInstrumentedStream(string $contents): InstrumentedTestStream
     {
         $resource = fopen('php://temp', 'r+');
         fwrite($resource, $contents);
         rewind($resource);
 
-        return new InstrumentedFactorySourceStream($resource);
-    }
-}
-
-final class InstrumentedFactorySourceStream extends Stream
-{
-    public int $rewindCalls = 0;
-    public int $getContentsCalls = 0;
-    public bool $failOnRewind = false;
-    public bool $failOnGetContents = false;
-
-    public function rewind(): void
-    {
-        $this->rewindCalls++;
-
-        if ($this->failOnRewind) {
-            throw new RuntimeException('rewind failure');
-        }
-
-        parent::rewind();
+        return new InstrumentedTestStream($resource);
     }
 
-    public function getContents(): string
+    private function buildSourceForScenario(string $contents, string $sourceKind, int $preConsumedBytes): Stream|NoSeekStream
     {
-        $this->getContentsCalls++;
+        $base = Utils::streamFor($contents);
 
-        if ($this->failOnGetContents) {
-            throw new RuntimeException('getContents failure');
+        if ($preConsumedBytes > 0) {
+            $base->read($preConsumedBytes);
         }
 
-        return parent::getContents();
+        return match ($sourceKind) {
+            'seekable' => $base,
+            'noseek' => new NoSeekStream($base),
+            default => throw new RuntimeException(sprintf('Unsupported source kind: %s', $sourceKind)),
+        };
     }
 }

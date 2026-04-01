@@ -62,6 +62,25 @@ $factory = new StreamFactory(new Encryptor(), new Decryptor());
   - pre-consumed cursor -> remaining-bytes semantics (or integrity failure for decrypting when payload is incomplete).
 - `StreamFactory` entrypoints preserve the exact compatibility behavior of direct `EncryptingStream` / `DecryptingStream` usage.
 
+### Test Coverage Matrix
+
+- Primitive boundary vectors are data-provider driven for malformed payloads, tampered ciphertext/MAC, and media-key length constraints.
+- Stream decorator lifecycle coverage includes constructor guards, detached/closed/unreadable transitions, and seekable/non-seekable cursor semantics.
+- StreamFactory workflow parity includes scenario-matrix checks across media types, source types, and cursor pre-consumption permutations.
+
+Run the full suite:
+
+```bash
+vendor/bin/phpunit
+```
+
+Run focused subsets:
+
+```bash
+vendor/bin/phpunit tests/AesCbcTest.php tests/HmacTest.php tests/MediaKeyExpanderTest.php tests/EncryptorDecryptorTest.php
+vendor/bin/phpunit tests/EncryptingStreamTest.php tests/DecryptingStreamTest.php tests/StreamFactoryTest.php
+```
+
 ## EncryptingStream
 
 `Infra\StreamEncryption\Stream\EncryptingStream` lazily reads a source PSR-7 stream,

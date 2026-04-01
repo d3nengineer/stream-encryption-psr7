@@ -13,6 +13,7 @@ use Infra\StreamEncryption\Exception\IntegrityException;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
 use Infra\StreamEncryption\Stream\DecryptingStream;
 use Infra\StreamEncryption\Stream\EncryptingStream;
+use Infra\StreamEncryption\Tests\Support\InstrumentedTestStream;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -68,38 +69,6 @@ final class DecryptingStreamTest extends TestCase
         );
 
         $this->assertSame($plaintext, (string) $stream);
-    }
-
-    public function testItDelegatesReadSeekTellEofAndContentsToTheInternalPlaintextStream(): void
-    {
-        $mediaKey = random_bytes(32);
-        $plaintext = 'delegation-content';
-        $stream = new DecryptingStream(
-            Utils::streamFor($this->encrypt($plaintext, $mediaKey, MediaType::AUDIO)),
-            $mediaKey,
-            MediaType::AUDIO,
-        );
-
-        $this->assertTrue($stream->isReadable());
-        $this->assertTrue($stream->isSeekable());
-        $this->assertSame(0, $stream->tell());
-
-        $first = $stream->read(8);
-
-        $this->assertSame(substr($plaintext, 0, 8), $first);
-        $this->assertSame(8, $stream->tell());
-
-        $stream->seek(0);
-
-        $this->assertSame(0, $stream->tell());
-        $this->assertSame($plaintext, $stream->getContents());
-        $this->assertTrue($stream->eof());
-
-        $stream->rewind();
-
-        $this->assertFalse($stream->eof());
-        $this->assertSame(strlen($plaintext), $stream->getSize());
-        $this->assertIsArray($stream->getMetadata());
     }
 
     public function testCompatibilityMatrixForDelegatedMethodsInitializesOnceAndStaysStable(): void
@@ -365,58 +334,6 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
-    public function testItPropagatesTruncatedPayloadIntegrityFailures(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::AUDIO);
-        $stream = new DecryptingStream(
-            Utils::streamFor(substr($payload, 0, -1)),
-            $mediaKey,
-            MediaType::AUDIO,
-        );
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
-    public function testItPropagatesTamperedCiphertextIntegrityFailures(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::IMAGE);
-        $payload[0] = $payload[0] ^ "\x01";
-        $stream = new DecryptingStream(Utils::streamFor($payload), $mediaKey, MediaType::IMAGE);
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
-    public function testItPropagatesTamperedCiphertextIntegrityFailuresForNoSeekSource(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::IMAGE);
-        $payload[0] = $payload[0] ^ "\x01";
-        $source = new NoSeekStream(Utils::streamFor($payload));
-        $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
-    public function testItPropagatesTamperedMacIntegrityFailures(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::VIDEO);
-        $payload[strlen($payload) - 1] = $payload[strlen($payload) - 1] ^ "\x01";
-        $stream = new DecryptingStream(Utils::streamFor($payload), $mediaKey, MediaType::VIDEO);
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
     public function testItPropagatesWrongMediaKeyFailures(): void
     {
         $payload = $this->encrypt('secret', random_bytes(32), MediaType::DOCUMENT);
@@ -438,6 +355,22 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
+    #[DataProvider('tamperMatrixProvider')]
+    public function testTamperMatrixFailsIntegrityBeforeDecrypt(
+        MediaType $mediaType,
+        string $sourceKind,
+        string $mutationVector,
+    ): void {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('tamper-matrix-stream-payload', $mediaKey, $mediaType);
+        $tamperedPayload = $this->applyTamperVector($payload, $mutationVector);
+        $source = $this->buildSourceByKind($tamperedPayload, $sourceKind);
+        $stream = new DecryptingStream($source, $mediaKey, $mediaType);
+
+        $this->expectException(IntegrityException::class);
+        $stream->read(1);
+    }
+
     public function testItPropagatesInvalidMediaKeyExceptionsFromTheCryptoLayer(): void
     {
         $payload = $this->encrypt('payload', random_bytes(32), MediaType::IMAGE);
@@ -448,14 +381,21 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
-    public function testReadAfterDetachFailsWhenEncryptedSourceIsNoLongerReadable(): void
+    #[DataProvider('unreadableSourceActionProvider')]
+    public function testReadFailsWhenSourceBecomesUnreadableBeforeFirstRead(string $action): void
     {
         $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('detach-lifecycle-check', $mediaKey, MediaType::IMAGE);
-        $source = $this->createInstrumentedSourceStream($payload);
+        $payload = $this->encrypt($action, $mediaKey, MediaType::IMAGE);
+        $source = $action === 'external-detach'
+            ? Utils::streamFor($payload)
+            : $this->createInstrumentedSourceStream($payload);
         $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
 
-        $stream->detach();
+        match ($action) {
+            'detach-lifecycle-check' => $stream->detach(),
+            'closed-before-read' => $stream->close(),
+            'external-detach' => $source->detach(),
+        };
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Source stream is not readable.');
@@ -486,63 +426,102 @@ final class DecryptingStreamTest extends TestCase
         ];
     }
 
+    /**
+     * @return array<string, array{0: MediaType, 1: string, 2: string}>
+     */
+    public static function tamperMatrixProvider(): array
+    {
+        return [
+            'DEBUG[tamper-stream/image-seekable-first-byte]' => [
+                MediaType::IMAGE,
+                'seekable-untouched',
+                'flip_first_byte',
+            ],
+            'DEBUG[tamper-stream/video-seekable-middle-byte]' => [
+                MediaType::VIDEO,
+                'seekable-untouched',
+                'flip_middle_byte',
+            ],
+            'DEBUG[tamper-stream/audio-noseek-untouched-mac-swap]' => [
+                MediaType::AUDIO,
+                'noseek-untouched',
+                'swap_mac_halves',
+            ],
+            'DEBUG[tamper-stream/document-noseek-prefix-truncation]' => [
+                MediaType::DOCUMENT,
+                'noseek-untouched',
+                'truncate_prefix',
+            ],
+            'DEBUG[tamper-stream/image-noseek-suffix-truncation]' => [
+                MediaType::IMAGE,
+                'noseek-untouched',
+                'truncate_suffix',
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unreadableSourceActionProvider(): array
+    {
+        return [
+            'owned-source-detached' => ['detach-lifecycle-check'],
+            'owned-source-closed' => ['closed-before-read'],
+            'externally-detached' => ['external-detach'],
+        ];
+    }
+
+    private function buildSourceByKind(string $payload, string $sourceKind): Stream|\GuzzleHttp\Psr7\NoSeekStream
+    {
+        $base = Utils::streamFor($payload);
+
+        return match ($sourceKind) {
+            'seekable-untouched' => $base,
+            'noseek-untouched' => new NoSeekStream($base),
+            default => throw new \InvalidArgumentException(sprintf('Unsupported source kind: %s', $sourceKind)),
+        };
+    }
+
+    private function applyTamperVector(string $payload, string $mutationVector): string
+    {
+        return match ($mutationVector) {
+            'flip_first_byte' => $this->flipPayloadByte($payload, 0),
+            'flip_middle_byte' => $this->flipPayloadByte($payload, max(0, intdiv(strlen($payload), 2) - 1)),
+            'truncate_prefix' => substr($payload, 1),
+            'truncate_suffix' => substr($payload, 0, -1),
+            'swap_mac_halves' => $this->swapMacHalves($payload),
+            default => throw new \InvalidArgumentException(sprintf('Unsupported mutation vector: %s', $mutationVector)),
+        };
+    }
+
+    private function flipPayloadByte(string $payload, int $offset): string
+    {
+        $tamperedPayload = $payload;
+        $tamperedPayload[$offset] = $tamperedPayload[$offset] ^ "\x01";
+
+        return $tamperedPayload;
+    }
+
+    private function swapMacHalves(string $payload): string
+    {
+        $ciphertext = substr($payload, 0, -32);
+        $mac = substr($payload, -32);
+
+        return $ciphertext . substr($mac, 16) . substr($mac, 0, 16);
+    }
+
     private function encrypt(string $plaintext, string $mediaKey, MediaType $mediaType): string
     {
         return (new Encryptor())->encrypt($plaintext, $mediaKey, $mediaType)->payload;
     }
 
-    private function createInstrumentedSourceStream(string $contents): InstrumentedDecryptSourceStream
+    private function createInstrumentedSourceStream(string $contents): InstrumentedTestStream
     {
         $resource = fopen('php://temp', 'r+');
         fwrite($resource, $contents);
         rewind($resource);
 
-        return new InstrumentedDecryptSourceStream($resource);
-    }
-}
-
-final class InstrumentedDecryptSourceStream extends Stream
-{
-    public bool $closeCalled = false;
-    public int $detachCalls = 0;
-    public int $rewindCalls = 0;
-    public int $getContentsCalls = 0;
-    public bool $failOnRewind = false;
-    public bool $failOnGetContents = false;
-
-    public function close(): void
-    {
-        $this->closeCalled = true;
-
-        parent::close();
-    }
-
-    public function detach()
-    {
-        $this->detachCalls++;
-
-        return parent::detach();
-    }
-
-    public function rewind(): void
-    {
-        $this->rewindCalls++;
-
-        if ($this->failOnRewind) {
-            throw new RuntimeException('rewind failure');
-        }
-
-        parent::rewind();
-    }
-
-    public function getContents(): string
-    {
-        $this->getContentsCalls++;
-
-        if ($this->failOnGetContents) {
-            throw new RuntimeException('getContents failure');
-        }
-
-        return parent::getContents();
+        return new InstrumentedTestStream($resource);
     }
 }

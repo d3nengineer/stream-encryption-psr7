@@ -7,6 +7,7 @@ namespace Infra\StreamEncryption\Tests;
 use Infra\StreamEncryption\Crypto\MediaKeyExpander;
 use Infra\StreamEncryption\Enum\MediaType;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class MediaKeyExpanderTest extends TestCase
@@ -37,13 +38,14 @@ final class MediaKeyExpanderTest extends TestCase
         $this->assertNotSame($imageKey->macKey, $videoKey->macKey);
     }
 
-    public function testItRejectsNon32ByteMediaKeys(): void
+    #[DataProvider('invalidMediaKeyLengthProvider')]
+    public function testItRejectsMediaKeysOutside32Bytes(string $mediaKey): void
     {
         $expander = new MediaKeyExpander();
 
         $this->expectException(InvalidMediaKeyException::class);
 
-        $expander->expand('short-key', MediaType::IMAGE);
+        $expander->expand($mediaKey, MediaType::IMAGE);
     }
 
     public function testItReturnsExpectedSegmentLengths(): void
@@ -54,5 +56,17 @@ final class MediaKeyExpanderTest extends TestCase
         $this->assertSame(16, strlen($expandedKey->iv));
         $this->assertSame(32, strlen($expandedKey->cipherKey));
         $this->assertSame(32, strlen($expandedKey->macKey));
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function invalidMediaKeyLengthProvider(): array
+    {
+        return [
+            'empty-0' => [''],
+            'short-31' => [random_bytes(31)],
+            'long-33' => [random_bytes(33)],
+        ];
     }
 }

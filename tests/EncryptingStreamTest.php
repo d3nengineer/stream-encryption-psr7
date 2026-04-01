@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Infra\StreamEncryption\Tests;
 
 use GuzzleHttp\Psr7\NoSeekStream;
-use GuzzleHttp\Psr7\Stream;
 use GuzzleHttp\Psr7\Utils;
 use Infra\StreamEncryption\Crypto\Decryptor;
 use Infra\StreamEncryption\Crypto\Encryptor;
 use Infra\StreamEncryption\Enum\MediaType;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
 use Infra\StreamEncryption\Stream\EncryptingStream;
+use Infra\StreamEncryption\Tests\Support\InstrumentedTestStream;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -59,34 +59,6 @@ final class EncryptingStreamTest extends TestCase
         $stream = new EncryptingStream(Utils::streamFor($plaintext), $mediaKey, $mediaType, $encryptor);
 
         $this->assertSame($expected->ciphertext . $expected->mac, (string) $stream);
-    }
-
-    public function testItDelegatesReadSeekTellEofAndContentsToTheInternalPayloadStream(): void
-    {
-        $stream = new EncryptingStream(Utils::streamFor('delegation-content'), random_bytes(32), MediaType::AUDIO);
-
-        $this->assertTrue($stream->isReadable());
-        $this->assertTrue($stream->isSeekable());
-        $this->assertSame(0, $stream->tell());
-
-        $first = $stream->read(8);
-
-        $this->assertSame(8, strlen($first));
-        $this->assertSame(8, $stream->tell());
-
-        $stream->seek(0);
-
-        $this->assertSame(0, $stream->tell());
-
-        $payload = $stream->getContents();
-
-        $this->assertNotSame('', $payload);
-        $this->assertTrue($stream->eof());
-
-        $stream->rewind();
-
-        $this->assertFalse($stream->eof());
-        $this->assertNotNull($stream->getSize());
     }
 
     public function testCompatibilityMatrixForDelegatedMethodsInitializesOnceAndStaysStable(): void
@@ -269,19 +241,25 @@ final class EncryptingStreamTest extends TestCase
         $this->assertSame($plaintext, $decryptor->decrypt((string) $stream, $mediaKey, MediaType::AUDIO));
     }
 
-    public function testSeekableSourcesEncryptFromStartEvenWhenPreConsumed(): void
-    {
-        $plaintext = 'seekable-source-data';
+    #[DataProvider('encryptionCursorSemanticsProvider')]
+    public function testEncryptionCursorSemanticsRespectSourceTypeAndCursorPosition(
+        string $sourcePlaintext,
+        int $preConsumedBytes,
+        bool $wrapInNoSeek,
+        string $expectedRemainder,
+        MediaType $mediaType,
+    ): void {
+        $base = Utils::streamFor($sourcePlaintext);
+        $base->read($preConsumedBytes);
+        $source = $wrapInNoSeek ? new NoSeekStream($base) : $base;
         $mediaKey = random_bytes(32);
-        $source = Utils::streamFor($plaintext);
-
-        $source->read(5);
-
-        $stream = new EncryptingStream($source, $mediaKey, MediaType::DOCUMENT);
-
+        $stream = new EncryptingStream($source, $mediaKey, $mediaType);
         $decryptor = new Decryptor();
 
-        $this->assertSame($plaintext, $decryptor->decrypt((string) $stream, $mediaKey, MediaType::DOCUMENT));
+        $this->assertSame(
+            $expectedRemainder,
+            $decryptor->decrypt((string) $stream, $mediaKey, $mediaType),
+        );
     }
 
     public function testGuzzleResourceBackedStreamsRemainCompatibleForEncryption(): void
@@ -301,20 +279,6 @@ final class EncryptingStreamTest extends TestCase
         $this->assertSame($plaintext, $decryptor->decrypt((string) $stream, $mediaKey, MediaType::VIDEO));
     }
 
-    public function testNonSeekableSourcesEncryptRemainingBytesFromCurrentCursor(): void
-    {
-        $base = Utils::streamFor('non-seekable-source-data');
-        $base->read(4);
-        $source = new NoSeekStream($base);
-        $mediaKey = random_bytes(32);
-
-        $stream = new EncryptingStream($source, $mediaKey, MediaType::AUDIO);
-
-        $decryptor = new Decryptor();
-
-        $this->assertSame('seekable-source-data', $decryptor->decrypt((string) $stream, $mediaKey, MediaType::AUDIO));
-    }
-
     public function testPreConsumedNonSeekableSourceCanEncryptEmptyRemainder(): void
     {
         $base = Utils::streamFor('all-consumed');
@@ -326,18 +290,27 @@ final class EncryptingStreamTest extends TestCase
         $source = new NoSeekStream($base);
         $mediaKey = random_bytes(32);
         $stream = new EncryptingStream($source, $mediaKey, MediaType::IMAGE);
-
         $decryptor = new Decryptor();
 
-        $this->assertSame('', $decryptor->decrypt((string) $stream, $mediaKey, MediaType::IMAGE));
+        $this->assertSame(
+            '',
+            $decryptor->decrypt((string) $stream, $mediaKey, MediaType::IMAGE),
+        );
     }
 
-    public function testReadAfterDetachFailsWhenSourceIsNoLongerReadable(): void
+    #[DataProvider('unreadableSourceActionProvider')]
+    public function testReadFailsWhenSourceBecomesUnreadableBeforeFirstRead(string $action): void
     {
-        $source = $this->createInstrumentedSourceStream('detach-lifecycle-check');
-        $stream = new EncryptingStream($source, random_bytes(32), MediaType::AUDIO);
+        $source = $action === 'external-detach'
+            ? Utils::streamFor('external-detach-after-construction')
+            : $this->createInstrumentedSourceStream($action);
+        $stream = new EncryptingStream($source, random_bytes(32), MediaType::DOCUMENT);
 
-        $stream->detach();
+        match ($action) {
+            'detach-lifecycle-check' => $stream->detach(),
+            'closed-before-read' => $stream->close(),
+            'external-detach' => $source->detach(),
+        };
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Source stream is not readable.');
@@ -369,58 +342,51 @@ final class EncryptingStreamTest extends TestCase
         ];
     }
 
-    private function createInstrumentedSourceStream(string $contents): InstrumentedSourceStream
+    /**
+     * @return array<string, array{0: string, 1: string, 2: int, 3: bool, 4: string, 5: MediaType}>
+     */
+    public static function encryptionCursorSemanticsProvider(): array
+    {
+        $seekablePlaintext = 'seekable-source-data';
+        $nonSeekablePlaintext = 'non-seekable-source-data';
+        $nonSeekableOffset = 4;
+
+        return [
+            'seekable-preconsumed-document' => [
+                $seekablePlaintext,
+                5,
+                false,
+                $seekablePlaintext,
+                MediaType::DOCUMENT,
+            ],
+            'noseek-offset-4-audio' => [
+                $nonSeekablePlaintext,
+                $nonSeekableOffset,
+                true,
+                substr($nonSeekablePlaintext, $nonSeekableOffset),
+                MediaType::AUDIO,
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unreadableSourceActionProvider(): array
+    {
+        return [
+            'owned-source-detached' => ['detach-lifecycle-check'],
+            'owned-source-closed' => ['closed-before-read'],
+            'externally-detached' => ['external-detach'],
+        ];
+    }
+
+    private function createInstrumentedSourceStream(string $contents): InstrumentedTestStream
     {
         $resource = fopen('php://temp', 'r+');
         fwrite($resource, $contents);
         rewind($resource);
 
-        return new InstrumentedSourceStream($resource);
-    }
-}
-
-final class InstrumentedSourceStream extends Stream
-{
-    public bool $closeCalled = false;
-    public int $detachCalls = 0;
-    public int $rewindCalls = 0;
-    public int $getContentsCalls = 0;
-    public bool $failOnRewind = false;
-    public bool $failOnGetContents = false;
-
-    public function close(): void
-    {
-        $this->closeCalled = true;
-
-        parent::close();
-    }
-
-    public function detach()
-    {
-        $this->detachCalls++;
-
-        return parent::detach();
-    }
-
-    public function rewind(): void
-    {
-        $this->rewindCalls++;
-
-        if ($this->failOnRewind) {
-            throw new RuntimeException('rewind failure');
-        }
-
-        parent::rewind();
-    }
-
-    public function getContents(): string
-    {
-        $this->getContentsCalls++;
-
-        if ($this->failOnGetContents) {
-            throw new RuntimeException('getContents failure');
-        }
-
-        return parent::getContents();
+        return new InstrumentedTestStream($resource);
     }
 }
