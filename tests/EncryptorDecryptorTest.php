@@ -6,6 +6,7 @@ namespace Infra\StreamEncryption\Tests;
 
 use Infra\StreamEncryption\Crypto\Decryptor;
 use Infra\StreamEncryption\Crypto\Encryptor;
+use Infra\StreamEncryption\Crypto\Hmac;
 use Infra\StreamEncryption\Enum\MediaType;
 use Infra\StreamEncryption\Exception\IntegrityException;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
@@ -124,12 +125,12 @@ final class EncryptorDecryptorTest extends TestCase
     {
         return [
             'DEBUG[payload-invalid/empty/image]' => ['', MediaType::IMAGE],
-            'DEBUG[payload-invalid/mac-only-32/video]' => [
-                random_bytes(32),
+            'DEBUG[payload-invalid/mac-only-10/video]' => [
+                random_bytes(Hmac::MAC_BYTES),
                 MediaType::VIDEO,
             ],
-            'DEBUG[payload-invalid/short-31/audio]' => [
-                random_bytes(31),
+            'DEBUG[payload-invalid/short-9/audio]' => [
+                random_bytes(Hmac::MAC_BYTES - 1),
                 MediaType::AUDIO,
             ],
         ];
@@ -145,7 +146,7 @@ final class EncryptorDecryptorTest extends TestCase
             'DEBUG[tamper/cipher-middle-byte/video]' => [MediaType::VIDEO, 'flip_middle_byte'],
             'DEBUG[tamper/payload-prefix-truncation/audio]' => [MediaType::AUDIO, 'truncate_prefix'],
             'DEBUG[tamper/payload-suffix-truncation/document]' => [MediaType::DOCUMENT, 'truncate_suffix'],
-            'DEBUG[tamper/mac-segment-swap/image]' => [MediaType::IMAGE, 'swap_mac_halves'],
+            'DEBUG[tamper/mac-segment-swap/image]' => [MediaType::IMAGE, 'swap_mac_segments'],
         ];
     }
 
@@ -167,7 +168,7 @@ final class EncryptorDecryptorTest extends TestCase
             'flip_middle_byte' => $this->flipByte($payload, max(0, intdiv(strlen($payload), 2) - 1)),
             'truncate_prefix' => substr($payload, 1),
             'truncate_suffix' => substr($payload, 0, -1),
-            'swap_mac_halves' => $this->swapMacHalves($payload),
+            'swap_mac_segments' => $this->swapMacSegments($payload),
             default => throw new \InvalidArgumentException(sprintf('Unknown mutation vector: %s', $mutation)),
         };
     }
@@ -180,13 +181,13 @@ final class EncryptorDecryptorTest extends TestCase
         return $tampered;
     }
 
-    private function swapMacHalves(string $payload): string
+    private function swapMacSegments(string $payload): string
     {
-        $ciphertext = substr($payload, 0, -32);
-        $mac = substr($payload, -32);
-        $firstHalf = substr($mac, 0, 16);
-        $secondHalf = substr($mac, 16);
+        $ciphertext = substr($payload, 0, -Hmac::MAC_BYTES);
+        $mac = substr($payload, -Hmac::MAC_BYTES);
+        $firstSegment = substr($mac, 0, 5);
+        $secondSegment = substr($mac, 5);
 
-        return $ciphertext . $secondHalf . $firstHalf;
+        return $ciphertext . $secondSegment . $firstSegment;
     }
 }

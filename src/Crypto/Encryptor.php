@@ -20,7 +20,7 @@ final class Encryptor
     {
         $expandedKey = $this->mediaKeyExpander->expand($mediaKey, $mediaType);
         $ciphertext = $this->aesCbc->encrypt($plaintext, $expandedKey->cipherKey, $expandedKey->iv);
-        $mac = $this->hmac->sign($ciphertext, $expandedKey->macKey);
+        $mac = $this->hmac->sign($expandedKey->iv, $ciphertext, $expandedKey->macKey);
 
         return new EncryptionResult($ciphertext, $mac);
     }

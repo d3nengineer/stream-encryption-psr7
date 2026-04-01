@@ -445,7 +445,7 @@ final class DecryptingStreamTest extends TestCase
             'DEBUG[tamper-stream/audio-noseek-untouched-mac-swap]' => [
                 MediaType::AUDIO,
                 'noseek-untouched',
-                'swap_mac_halves',
+                'swap_mac_segments',
             ],
             'DEBUG[tamper-stream/document-noseek-prefix-truncation]' => [
                 MediaType::DOCUMENT,
@@ -490,7 +490,7 @@ final class DecryptingStreamTest extends TestCase
             'flip_middle_byte' => $this->flipPayloadByte($payload, max(0, intdiv(strlen($payload), 2) - 1)),
             'truncate_prefix' => substr($payload, 1),
             'truncate_suffix' => substr($payload, 0, -1),
-            'swap_mac_halves' => $this->swapMacHalves($payload),
+            'swap_mac_segments' => $this->swapMacSegments($payload),
             default => throw new \InvalidArgumentException(sprintf('Unsupported mutation vector: %s', $mutationVector)),
         };
     }
@@ -503,12 +503,12 @@ final class DecryptingStreamTest extends TestCase
         return $tamperedPayload;
     }
 
-    private function swapMacHalves(string $payload): string
+    private function swapMacSegments(string $payload): string
     {
-        $ciphertext = substr($payload, 0, -32);
-        $mac = substr($payload, -32);
+        $ciphertext = substr($payload, 0, -10);
+        $mac = substr($payload, -10);
 
-        return $ciphertext . substr($mac, 16) . substr($mac, 0, 16);
+        return $ciphertext . substr($mac, 5) . substr($mac, 0, 5);
     }
 
     private function encrypt(string $plaintext, string $mediaKey, MediaType $mediaType): string

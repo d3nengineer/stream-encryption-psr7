@@ -11,48 +11,67 @@ use PHPUnit\Framework\TestCase;
 
 final class HmacTest extends TestCase
 {
-    public function testItSignsAndVerifiesCiphertext(): void
+    public function testItSignsAndVerifiesIvAndCiphertext(): void
     {
         $hmac = new Hmac();
+        $iv = random_bytes(16);
         $ciphertext = random_bytes(64);
         $macKey = random_bytes(32);
-        $mac = $hmac->sign($ciphertext, $macKey);
+        $mac = $hmac->sign($iv, $ciphertext, $macKey);
 
-        $this->assertSame(32, strlen($mac));
+        $this->assertSame(Hmac::MAC_BYTES, strlen($mac));
 
-        $hmac->verify($ciphertext, $mac, $macKey);
+        $hmac->verify($iv, $ciphertext, $mac, $macKey);
     }
 
     public function testItFailsForTamperedCiphertext(): void
     {
         $hmac = new Hmac();
+        $iv = random_bytes(16);
         $ciphertext = random_bytes(64);
         $macKey = random_bytes(32);
-        $mac = $hmac->sign($ciphertext, $macKey);
+        $mac = $hmac->sign($iv, $ciphertext, $macKey);
         $tamperedCiphertext = $ciphertext;
         $tamperedCiphertext[0] = $tamperedCiphertext[0] ^ "\x01";
 
         $this->expectException(IntegrityException::class);
 
-        $hmac->verify($tamperedCiphertext, $mac, $macKey);
+        $hmac->verify($iv, $tamperedCiphertext, $mac, $macKey);
+    }
+
+    public function testItFailsForTamperedIv(): void
+    {
+        $hmac = new Hmac();
+        $iv = random_bytes(16);
+        $ciphertext = random_bytes(64);
+        $macKey = random_bytes(32);
+        $mac = $hmac->sign($iv, $ciphertext, $macKey);
+        $tamperedIv = $iv;
+        $tamperedIv[0] = $tamperedIv[0] ^ "\x01";
+
+        $this->expectException(IntegrityException::class);
+
+        $hmac->verify($tamperedIv, $ciphertext, $mac, $macKey);
     }
 
     public function testItFailsForTamperedMac(): void
     {
         $hmac = new Hmac();
+        $iv = random_bytes(16);
         $ciphertext = random_bytes(64);
         $macKey = random_bytes(32);
-        $mac = $hmac->sign($ciphertext, $macKey);
+        $mac = $hmac->sign($iv, $ciphertext, $macKey);
         $tamperedMac = $mac;
         $tamperedMac[0] = $tamperedMac[0] ^ "\x01";
 
         $this->expectException(IntegrityException::class);
 
-        $hmac->verify($ciphertext, $tamperedMac, $macKey);
+        $hmac->verify($iv, $ciphertext, $tamperedMac, $macKey);
     }
 
     #[DataProvider('invalidVerifyBoundariesProvider')]
     public function testItFailsForMalformedMacBoundaries(
+        string $iv,
         string $ciphertext,
         string $mac,
         string $macKey,
@@ -61,30 +80,34 @@ final class HmacTest extends TestCase
 
         $this->expectException(IntegrityException::class);
 
-        $hmac->verify($ciphertext, $mac, $macKey);
+        $hmac->verify($iv, $ciphertext, $mac, $macKey);
     }
 
     /**
-     * @return array<string, array{0: string, 1: string, 2: string}>
+     * @return array<string, array{0: string, 1: string, 2: string, 3: string}>
      */
     public static function invalidVerifyBoundariesProvider(): array
     {
+        $iv = random_bytes(16);
         $ciphertext = random_bytes(64);
         $macKey = random_bytes(32);
-        $validMac = (new Hmac())->sign($ciphertext, $macKey);
+        $validMac = (new Hmac())->sign($iv, $ciphertext, $macKey);
 
         return [
             'mac-empty' => [
+                $iv,
                 $ciphertext,
                 '',
                 $macKey,
             ],
-            'mac-truncated-16' => [
+            'mac-truncated-9' => [
+                $iv,
                 $ciphertext,
-                substr($validMac, 0, 16),
+                substr($validMac, 0, Hmac::MAC_BYTES - 1),
                 $macKey,
             ],
             'wrong-key-size-16' => [
+                $iv,
                 $ciphertext,
                 $validMac,
                 random_bytes(16),

@@ -26,7 +26,7 @@ final class Decryptor
         $ciphertext = substr($payload, 0, -Hmac::MAC_BYTES);
         $mac = substr($payload, -Hmac::MAC_BYTES);
 
-        $this->hmac->verify($ciphertext, $mac, $expandedKey->macKey);
+        $this->hmac->verify($expandedKey->iv, $ciphertext, $mac, $expandedKey->macKey);
 
         return $this->aesCbc->decrypt($ciphertext, $expandedKey->cipherKey, $expandedKey->iv);
     }
