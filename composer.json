@@ -3,6 +3,13 @@
   "description": "PSR-7 stream decorators for media encryption (AES-CBC + HKDF + HMAC)",
   "type": "library",
   "license": "MIT",
+  "keywords": [
+    "psr-7",
+    "stream",
+    "encryption",
+    "aes-cbc",
+    "hmac"
+  ],
   "autoload": {
     "psr-4": {
       "Infra\\StreamEncryption\\": "src/"
@@ -19,6 +26,15 @@
     "guzzlehttp/psr7": "^2.0"
   },
   "require-dev": {
-    "phpunit/phpunit": "^13.0"
+    "phpunit/phpunit": "^11.5"
+  },
+  "scripts": {
+    "lint": "find src tests -name '*.php' -print0 | xargs -0 -n1 php -l",
+    "test": "vendor/bin/phpunit",
+    "check": [
+      "@composer validate --strict",
+      "@lint",
+      "@test"
+    ]
   }
 }

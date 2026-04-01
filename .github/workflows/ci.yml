@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  release-readiness:
+    name: Release Readiness (PHP ${{ matrix.php-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.2', '8.3', '8.4', '8.5']
+
+    steps:
+      - name: Check out repository sources
+        uses: actions/checkout@v4
+
+      - name: Set up PHP with Composer and required extensions
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Composer dependencies for the library
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Validate Composer metadata strictly
+        run: composer validate --strict
+
+      - name: Lint PHP sources under src and tests
+        run: composer lint
+
+      - name: Run the PHPUnit test suite
+        run: composer test
