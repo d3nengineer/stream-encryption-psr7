@@ -48,9 +48,7 @@ $plaintext = (string) $decrypted;
 Run the same checks locally that the repository uses for release-readiness:
 
 ```bash
-composer validate --strict
-find src tests -name '*.php' -print0 | xargs -0 -n1 php -l
-vendor/bin/phpunit
+composer check
 ```
 
 ## More Details
