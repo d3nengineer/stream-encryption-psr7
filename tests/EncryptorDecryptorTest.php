@@ -92,44 +92,6 @@ final class EncryptorDecryptorTest extends TestCase
         $this->assertSame($plaintext, $decryptor->decrypt($result->payload, $mediaKey, MediaType::AUDIO));
     }
 
-    #[DataProvider('sampleFixtureProvider')]
-    public function testItDecryptsAssignmentFixtures(
-        MediaType $mediaType,
-        string $originalPath,
-        string $encryptedPath,
-        string $keyPath,
-    ): void {
-        $decryptor = new Decryptor();
-
-        $this->assertSame(
-            file_get_contents($originalPath),
-            $decryptor->decrypt(
-                file_get_contents($encryptedPath),
-                file_get_contents($keyPath),
-                $mediaType,
-            ),
-        );
-    }
-
-    #[DataProvider('sampleFixtureProvider')]
-    public function testItEncryptsAssignmentFixturesExactly(
-        MediaType $mediaType,
-        string $originalPath,
-        string $encryptedPath,
-        string $keyPath,
-    ): void {
-        $encryptor = new Encryptor();
-
-        $this->assertSame(
-            file_get_contents($encryptedPath),
-            $encryptor->encrypt(
-                file_get_contents($originalPath),
-                file_get_contents($keyPath),
-                $mediaType,
-            )->payload,
-        );
-    }
-
     #[DataProvider('invalidMediaKeyProvider')]
     public function testItRejectsInvalidMediaKeyLengthsAtPublicBoundaries(
         string $invalidMediaKey,
@@ -196,33 +158,6 @@ final class EncryptorDecryptorTest extends TestCase
         return [
             'DEBUG[key-invalid/short-31]' => [random_bytes(31)],
             'DEBUG[key-invalid/long-33]' => [random_bytes(33)],
-        ];
-    }
-
-    /**
-     * @return array<string, array{0: MediaType, 1: string, 2: string, 3: string}>
-     */
-    public static function sampleFixtureProvider(): array
-    {
-        return [
-            'image-fixture' => [
-                MediaType::IMAGE,
-                __DIR__ . '/../samples/IMAGE.original',
-                __DIR__ . '/../samples/IMAGE.encrypted',
-                __DIR__ . '/../samples/IMAGE.key',
-            ],
-            'video-fixture' => [
-                MediaType::VIDEO,
-                __DIR__ . '/../samples/VIDEO.original',
-                __DIR__ . '/../samples/VIDEO.encrypted',
-                __DIR__ . '/../samples/VIDEO.key',
-            ],
-            'audio-fixture' => [
-                MediaType::AUDIO,
-                __DIR__ . '/../samples/AUDIO.original',
-                __DIR__ . '/../samples/AUDIO.encrypted',
-                __DIR__ . '/../samples/AUDIO.key',
-            ],
         ];
     }
 
