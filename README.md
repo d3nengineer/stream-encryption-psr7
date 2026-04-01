@@ -2,6 +2,10 @@
 
 `d3nengineer/stream-encryption-psr7` is a PHP 8.2+ library that exposes lazy PSR-7 stream decorators for media encryption and decryption using AES-CBC, HKDF-SHA256, and HMAC-SHA256.
 
+> [!WARNING]
+> Do not use in production.
+> This repository was created as part of a test assignment and is published for demonstration purposes only. It is not production-ready and is not recommended for real-world use.
+
 ## Installation
 
 ```bash
