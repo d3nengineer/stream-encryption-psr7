@@ -9,7 +9,7 @@
 ## Payload Contract
 
 - Encrypted payloads use the `ciphertext || mac` format.
-- The MAC is an HMAC-SHA256 over the ciphertext bytes.
+- The MAC is the first 10 bytes of an HMAC-SHA256 over `iv || ciphertext`.
 - Decryption verifies integrity before attempting AES-CBC decryption.
 - Media key and media type must match the payload that produced the ciphertext.
 

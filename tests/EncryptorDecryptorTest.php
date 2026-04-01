@@ -6,6 +6,7 @@ namespace Infra\StreamEncryption\Tests;
 
 use Infra\StreamEncryption\Crypto\Decryptor;
 use Infra\StreamEncryption\Crypto\Encryptor;
+use Infra\StreamEncryption\Crypto\Hmac;
 use Infra\StreamEncryption\Enum\MediaType;
 use Infra\StreamEncryption\Exception\IntegrityException;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
@@ -91,6 +92,44 @@ final class EncryptorDecryptorTest extends TestCase
         $this->assertSame($plaintext, $decryptor->decrypt($result->payload, $mediaKey, MediaType::AUDIO));
     }
 
+    #[DataProvider('sampleFixtureProvider')]
+    public function testItDecryptsAssignmentFixtures(
+        MediaType $mediaType,
+        string $originalPath,
+        string $encryptedPath,
+        string $keyPath,
+    ): void {
+        $decryptor = new Decryptor();
+
+        $this->assertSame(
+            file_get_contents($originalPath),
+            $decryptor->decrypt(
+                file_get_contents($encryptedPath),
+                file_get_contents($keyPath),
+                $mediaType,
+            ),
+        );
+    }
+
+    #[DataProvider('sampleFixtureProvider')]
+    public function testItEncryptsAssignmentFixturesExactly(
+        MediaType $mediaType,
+        string $originalPath,
+        string $encryptedPath,
+        string $keyPath,
+    ): void {
+        $encryptor = new Encryptor();
+
+        $this->assertSame(
+            file_get_contents($encryptedPath),
+            $encryptor->encrypt(
+                file_get_contents($originalPath),
+                file_get_contents($keyPath),
+                $mediaType,
+            )->payload,
+        );
+    }
+
     #[DataProvider('invalidMediaKeyProvider')]
     public function testItRejectsInvalidMediaKeyLengthsAtPublicBoundaries(
         string $invalidMediaKey,
@@ -124,12 +163,12 @@ final class EncryptorDecryptorTest extends TestCase
     {
         return [
             'DEBUG[payload-invalid/empty/image]' => ['', MediaType::IMAGE],
-            'DEBUG[payload-invalid/mac-only-32/video]' => [
-                random_bytes(32),
+            'DEBUG[payload-invalid/mac-only-10/video]' => [
+                random_bytes(Hmac::MAC_BYTES),
                 MediaType::VIDEO,
             ],
-            'DEBUG[payload-invalid/short-31/audio]' => [
-                random_bytes(31),
+            'DEBUG[payload-invalid/short-9/audio]' => [
+                random_bytes(Hmac::MAC_BYTES - 1),
                 MediaType::AUDIO,
             ],
         ];
@@ -145,7 +184,7 @@ final class EncryptorDecryptorTest extends TestCase
             'DEBUG[tamper/cipher-middle-byte/video]' => [MediaType::VIDEO, 'flip_middle_byte'],
             'DEBUG[tamper/payload-prefix-truncation/audio]' => [MediaType::AUDIO, 'truncate_prefix'],
             'DEBUG[tamper/payload-suffix-truncation/document]' => [MediaType::DOCUMENT, 'truncate_suffix'],
-            'DEBUG[tamper/mac-segment-swap/image]' => [MediaType::IMAGE, 'swap_mac_halves'],
+            'DEBUG[tamper/mac-segment-swap/image]' => [MediaType::IMAGE, 'swap_mac_segments'],
         ];
     }
 
@@ -160,6 +199,33 @@ final class EncryptorDecryptorTest extends TestCase
         ];
     }
 
+    /**
+     * @return array<string, array{0: MediaType, 1: string, 2: string, 3: string}>
+     */
+    public static function sampleFixtureProvider(): array
+    {
+        return [
+            'image-fixture' => [
+                MediaType::IMAGE,
+                __DIR__ . '/../samples/IMAGE.original',
+                __DIR__ . '/../samples/IMAGE.encrypted',
+                __DIR__ . '/../samples/IMAGE.key',
+            ],
+            'video-fixture' => [
+                MediaType::VIDEO,
+                __DIR__ . '/../samples/VIDEO.original',
+                __DIR__ . '/../samples/VIDEO.encrypted',
+                __DIR__ . '/../samples/VIDEO.key',
+            ],
+            'audio-fixture' => [
+                MediaType::AUDIO,
+                __DIR__ . '/../samples/AUDIO.original',
+                __DIR__ . '/../samples/AUDIO.encrypted',
+                __DIR__ . '/../samples/AUDIO.key',
+            ],
+        ];
+    }
+
     private function mutatePayload(string $payload, string $mutation): string
     {
         return match ($mutation) {
@@ -167,7 +233,7 @@ final class EncryptorDecryptorTest extends TestCase
             'flip_middle_byte' => $this->flipByte($payload, max(0, intdiv(strlen($payload), 2) - 1)),
             'truncate_prefix' => substr($payload, 1),
             'truncate_suffix' => substr($payload, 0, -1),
-            'swap_mac_halves' => $this->swapMacHalves($payload),
+            'swap_mac_segments' => $this->swapMacSegments($payload),
             default => throw new \InvalidArgumentException(sprintf('Unknown mutation vector: %s', $mutation)),
         };
     }
@@ -180,13 +246,13 @@ final class EncryptorDecryptorTest extends TestCase
         return $tampered;
     }
 
-    private function swapMacHalves(string $payload): string
+    private function swapMacSegments(string $payload): string
     {
-        $ciphertext = substr($payload, 0, -32);
-        $mac = substr($payload, -32);
-        $firstHalf = substr($mac, 0, 16);
-        $secondHalf = substr($mac, 16);
+        $ciphertext = substr($payload, 0, -Hmac::MAC_BYTES);
+        $mac = substr($payload, -Hmac::MAC_BYTES);
+        $firstSegment = substr($mac, 0, 5);
+        $secondSegment = substr($mac, 5);
 
-        return $ciphertext . $secondHalf . $firstHalf;
+        return $ciphertext . $secondSegment . $firstSegment;
     }
 }
