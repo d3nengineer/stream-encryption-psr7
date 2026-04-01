@@ -438,6 +438,42 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
+    #[DataProvider('tamperMatrixProvider')]
+    public function testTamperMatrixFailsIntegrityBeforeDecrypt(
+        string $scenarioId,
+        MediaType $mediaType,
+        string $sourceKind,
+        string $mutationVector,
+    ): void {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('tamper-matrix-stream-payload', $mediaKey, $mediaType);
+        $tamperedPayload = $this->applyTamperVector($payload, $mutationVector);
+        $source = $this->buildSourceByKind($tamperedPayload, $sourceKind);
+        $stream = new DecryptingStream($source, $mediaKey, $mediaType);
+
+        try {
+            $stream->read(1);
+            $this->fail(sprintf(
+                'ERROR[%s]: expected IntegrityException before decrypt boundary for vector %s on %s source.',
+                $scenarioId,
+                $mutationVector,
+                $sourceKind,
+            ));
+        } catch (IntegrityException) {
+            $this->assertTrue(true, sprintf(
+                'INFO[%s]: integrity failure triggered before decrypt as expected.',
+                $scenarioId,
+            ));
+        } catch (\Throwable $exception) {
+            $this->fail(sprintf(
+                'ERROR[%s]: expected IntegrityException, got %s (%s).',
+                $scenarioId,
+                $exception::class,
+                $exception->getMessage(),
+            ));
+        }
+    }
+
     public function testItPropagatesInvalidMediaKeyExceptionsFromTheCryptoLayer(): void
     {
         $payload = $this->encrypt('payload', random_bytes(32), MediaType::IMAGE);
@@ -456,6 +492,35 @@ final class DecryptingStreamTest extends TestCase
         $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
 
         $stream->detach();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Source stream is not readable.');
+
+        $stream->read(1);
+    }
+
+    public function testReadAfterCloseFailsWhenSourceBecomesUnreadable(): void
+    {
+        $scenarioId = 'decrypt-lifecycle/closed-before-read/document';
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('closed-before-read', $mediaKey, MediaType::DOCUMENT);
+        $source = $this->createInstrumentedSourceStream($payload);
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::DOCUMENT);
+        $stream->close();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Source stream is not readable.');
+
+        $stream->read(1);
+    }
+
+    public function testReadFailsWhenSourceIsDetachedExternallyAfterConstruction(): void
+    {
+        $mediaKey = random_bytes(32);
+        $payload = $this->encrypt('detached-after-construction', $mediaKey, MediaType::AUDIO);
+        $source = Utils::streamFor($payload);
+        $stream = new DecryptingStream($source, $mediaKey, MediaType::AUDIO);
+        $source->detach();
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Source stream is not readable.');
@@ -484,6 +549,84 @@ final class DecryptingStreamTest extends TestCase
             'audio-with-null-bytes' => [MediaType::AUDIO, "ID3\x00\x10\xFF\x00audio"],
             'document-utf8-and-binary' => [MediaType::DOCUMENT, "PDF\x00\x01body\n\xFF\xFE"],
         ];
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: MediaType, 2: string, 3: string}>
+     */
+    public static function tamperMatrixProvider(): array
+    {
+        return [
+            'DEBUG[tamper-stream/image-seekable-first-byte]' => [
+                'tamper-stream/image-seekable-first-byte',
+                MediaType::IMAGE,
+                'seekable-untouched',
+                'flip_first_byte',
+            ],
+            'DEBUG[tamper-stream/video-seekable-middle-byte]' => [
+                'tamper-stream/video-seekable-middle-byte',
+                MediaType::VIDEO,
+                'seekable-untouched',
+                'flip_middle_byte',
+            ],
+            'DEBUG[tamper-stream/audio-noseek-untouched-mac-swap]' => [
+                'tamper-stream/audio-noseek-untouched-mac-swap',
+                MediaType::AUDIO,
+                'noseek-untouched',
+                'swap_mac_halves',
+            ],
+            'DEBUG[tamper-stream/document-noseek-prefix-truncation]' => [
+                'tamper-stream/document-noseek-prefix-truncation',
+                MediaType::DOCUMENT,
+                'noseek-untouched',
+                'truncate_prefix',
+            ],
+            'DEBUG[tamper-stream/image-noseek-suffix-truncation]' => [
+                'tamper-stream/image-noseek-suffix-truncation',
+                MediaType::IMAGE,
+                'noseek-untouched',
+                'truncate_suffix',
+            ],
+        ];
+    }
+
+    private function buildSourceByKind(string $payload, string $sourceKind): Stream|\GuzzleHttp\Psr7\NoSeekStream
+    {
+        $base = Utils::streamFor($payload);
+
+        return match ($sourceKind) {
+            'seekable-untouched' => $base,
+            'noseek-untouched' => new NoSeekStream($base),
+            default => throw new \InvalidArgumentException(sprintf('Unsupported source kind: %s', $sourceKind)),
+        };
+    }
+
+    private function applyTamperVector(string $payload, string $mutationVector): string
+    {
+        return match ($mutationVector) {
+            'flip_first_byte' => $this->flipPayloadByte($payload, 0),
+            'flip_middle_byte' => $this->flipPayloadByte($payload, max(0, intdiv(strlen($payload), 2) - 1)),
+            'truncate_prefix' => substr($payload, 1),
+            'truncate_suffix' => substr($payload, 0, -1),
+            'swap_mac_halves' => $this->swapMacHalves($payload),
+            default => throw new \InvalidArgumentException(sprintf('Unsupported mutation vector: %s', $mutationVector)),
+        };
+    }
+
+    private function flipPayloadByte(string $payload, int $offset): string
+    {
+        $tamperedPayload = $payload;
+        $tamperedPayload[$offset] = $tamperedPayload[$offset] ^ "\x01";
+
+        return $tamperedPayload;
+    }
+
+    private function swapMacHalves(string $payload): string
+    {
+        $ciphertext = substr($payload, 0, -32);
+        $mac = substr($payload, -32);
+
+        return $ciphertext . substr($mac, 16) . substr($mac, 0, 16);
     }
 
     private function encrypt(string $plaintext, string $mediaKey, MediaType $mediaType): string

@@ -269,19 +269,30 @@ final class EncryptingStreamTest extends TestCase
         $this->assertSame($plaintext, $decryptor->decrypt((string) $stream, $mediaKey, MediaType::AUDIO));
     }
 
-    public function testSeekableSourcesEncryptFromStartEvenWhenPreConsumed(): void
-    {
-        $plaintext = 'seekable-source-data';
+    #[DataProvider('encryptionCursorSemanticsProvider')]
+    public function testEncryptionCursorSemanticsRespectSourceTypeAndCursorPosition(
+        string $scenarioId,
+        string $sourcePlaintext,
+        int $preConsumedBytes,
+        bool $wrapInNoSeek,
+        string $expectedRemainder,
+        MediaType $mediaType,
+    ): void {
+        $base = Utils::streamFor($sourcePlaintext);
+        $base->read($preConsumedBytes);
+        $source = $wrapInNoSeek ? new NoSeekStream($base) : $base;
         $mediaKey = random_bytes(32);
-        $source = Utils::streamFor($plaintext);
-
-        $source->read(5);
-
-        $stream = new EncryptingStream($source, $mediaKey, MediaType::DOCUMENT);
-
+        $stream = new EncryptingStream($source, $mediaKey, $mediaType);
         $decryptor = new Decryptor();
 
-        $this->assertSame($plaintext, $decryptor->decrypt((string) $stream, $mediaKey, MediaType::DOCUMENT));
+        $this->assertSame(
+            $expectedRemainder,
+            $decryptor->decrypt((string) $stream, $mediaKey, $mediaType),
+            sprintf(
+                'INFO[%s]: encrypt remaining bytes from current cursor for non-seekable sources; seekable sources rewind and encrypt full plaintext.',
+                $scenarioId,
+            ),
+        );
     }
 
     public function testGuzzleResourceBackedStreamsRemainCompatibleForEncryption(): void
@@ -301,22 +312,9 @@ final class EncryptingStreamTest extends TestCase
         $this->assertSame($plaintext, $decryptor->decrypt((string) $stream, $mediaKey, MediaType::VIDEO));
     }
 
-    public function testNonSeekableSourcesEncryptRemainingBytesFromCurrentCursor(): void
-    {
-        $base = Utils::streamFor('non-seekable-source-data');
-        $base->read(4);
-        $source = new NoSeekStream($base);
-        $mediaKey = random_bytes(32);
-
-        $stream = new EncryptingStream($source, $mediaKey, MediaType::AUDIO);
-
-        $decryptor = new Decryptor();
-
-        $this->assertSame('seekable-source-data', $decryptor->decrypt((string) $stream, $mediaKey, MediaType::AUDIO));
-    }
-
     public function testPreConsumedNonSeekableSourceCanEncryptEmptyRemainder(): void
     {
+        $scenarioId = 'DEBUG[encrypt-cursor/noseek-fully-consumed/image]';
         $base = Utils::streamFor('all-consumed');
 
         while (!$base->eof()) {
@@ -326,10 +324,13 @@ final class EncryptingStreamTest extends TestCase
         $source = new NoSeekStream($base);
         $mediaKey = random_bytes(32);
         $stream = new EncryptingStream($source, $mediaKey, MediaType::IMAGE);
-
         $decryptor = new Decryptor();
 
-        $this->assertSame('', $decryptor->decrypt((string) $stream, $mediaKey, MediaType::IMAGE));
+        $this->assertSame(
+            '',
+            $decryptor->decrypt((string) $stream, $mediaKey, MediaType::IMAGE),
+            sprintf('%s INFO: fully consumed non-seekable source should produce an empty plaintext remainder.', $scenarioId),
+        );
     }
 
     public function testReadAfterDetachFailsWhenSourceIsNoLongerReadable(): void
@@ -338,6 +339,30 @@ final class EncryptingStreamTest extends TestCase
         $stream = new EncryptingStream($source, random_bytes(32), MediaType::AUDIO);
 
         $stream->detach();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Source stream is not readable.');
+
+        $stream->read(1);
+    }
+
+    public function testReadAfterCloseFailsWhenSourceBecomesUnreadable(): void
+    {
+        $source = $this->createInstrumentedSourceStream('closed-before-read');
+        $stream = new EncryptingStream($source, random_bytes(32), MediaType::VIDEO);
+        $stream->close();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Source stream is not readable.');
+
+        $stream->read(1);
+    }
+
+    public function testReadFailsWhenSourceIsDetachedExternallyAfterConstruction(): void
+    {
+        $source = Utils::streamFor('external-detach-after-construction');
+        $stream = new EncryptingStream($source, random_bytes(32), MediaType::DOCUMENT);
+        $source->detach();
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Source stream is not readable.');
@@ -366,6 +391,35 @@ final class EncryptingStreamTest extends TestCase
             'video-random-chunk' => [MediaType::VIDEO, random_bytes(128)],
             'audio-with-null-bytes' => [MediaType::AUDIO, "ID3\x00\x10\xFF\x00audio"],
             'document-utf8-and-binary' => [MediaType::DOCUMENT, "PDF\x00\x01body\n\xFF\xFE"],
+        ];
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: int, 3: bool, 4: string, 5: MediaType}>
+     */
+    public static function encryptionCursorSemanticsProvider(): array
+    {
+        $seekablePlaintext = 'seekable-source-data';
+        $nonSeekablePlaintext = 'non-seekable-source-data';
+        $nonSeekableOffset = 4;
+
+        return [
+            'DEBUG[encrypt-cursor/seekable-preconsumed/document]' => [
+                'encrypt-cursor/seekable-preconsumed/document',
+                $seekablePlaintext,
+                5,
+                false,
+                $seekablePlaintext,
+                MediaType::DOCUMENT,
+            ],
+            'DEBUG[encrypt-cursor/noseek-offset-4/audio]' => [
+                'encrypt-cursor/noseek-offset-4/audio',
+                $nonSeekablePlaintext,
+                $nonSeekableOffset,
+                true,
+                substr($nonSeekablePlaintext, $nonSeekableOffset),
+                MediaType::AUDIO,
+            ],
         ];
     }
 

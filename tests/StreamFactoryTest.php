@@ -202,6 +202,66 @@ final class StreamFactoryTest extends TestCase
         $this->assertSame('noseek-remaining', $decrypted);
     }
 
+    #[DataProvider('factoryWorkflowParityProvider')]
+    public function testFactoryWorkflowParityAcrossSourceAndCursorPermutations(
+        string $scenarioId,
+        MediaType $mediaType,
+        string $plaintext,
+        string $encryptionSourceKind,
+        int $encryptionPreConsumedBytes,
+        string $decryptionSourceKind,
+        int $decryptionPreConsumedBytes,
+    ): void {
+        $mediaKey = random_bytes(32);
+        $factory = new StreamFactory();
+
+        $factoryEncryptedPayload = (string) $factory->encrypt(
+            $this->buildSourceForScenario($plaintext, $encryptionSourceKind, $encryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
+        $directEncryptedPayload = (string) new EncryptingStream(
+            $this->buildSourceForScenario($plaintext, $encryptionSourceKind, $encryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
+
+        $decryptor = new Decryptor();
+        $this->assertSame(
+            $decryptor->decrypt($directEncryptedPayload, $mediaKey, $mediaType),
+            $decryptor->decrypt($factoryEncryptedPayload, $mediaKey, $mediaType),
+            sprintf(
+                'INFO[%s]: factory encrypt parity with direct decorator should hold for source kind %s at pre-consumed offset %d.',
+                $scenarioId,
+                $encryptionSourceKind,
+                $encryptionPreConsumedBytes,
+            ),
+        );
+
+        $payload = (new Encryptor())->encrypt($plaintext, $mediaKey, $mediaType)->payload;
+        $factoryDecryptedPlaintext = (string) $factory->decrypt(
+            $this->buildSourceForScenario($payload, $decryptionSourceKind, $decryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
+        $directDecryptedPlaintext = (string) new DecryptingStream(
+            $this->buildSourceForScenario($payload, $decryptionSourceKind, $decryptionPreConsumedBytes),
+            $mediaKey,
+            $mediaType,
+        );
+
+        $this->assertSame(
+            $directDecryptedPlaintext,
+            $factoryDecryptedPlaintext,
+            sprintf(
+                'INFO[%s]: factory decrypt parity with direct decorator should hold for source kind %s at pre-consumed offset %d.',
+                $scenarioId,
+                $decryptionSourceKind,
+                $decryptionPreConsumedBytes,
+            ),
+        );
+    }
+
     /**
      * @return array<string, array{0: MediaType, 1: string}>
      */
@@ -212,6 +272,51 @@ final class StreamFactoryTest extends TestCase
             'video' => [MediaType::VIDEO, random_bytes(96)],
             'audio' => [MediaType::AUDIO, "ID3\x00\x10\xFF\x00audio"],
             'document' => [MediaType::DOCUMENT, "PDF\x00\x01body\n\xFF\xFE"],
+        ];
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: MediaType, 2: string, 3: string, 4: int, 5: string, 6: int}>
+     */
+    public static function factoryWorkflowParityProvider(): array
+    {
+        return [
+            'DEBUG[wf/seekable-pristine/image->decrypt-seekable]' => [
+                'wf/seekable-pristine/image->decrypt-seekable',
+                MediaType::IMAGE,
+                "binary\x00image\x01payload",
+                'seekable',
+                0,
+                'seekable',
+                0,
+            ],
+            'DEBUG[wf/seekable-preconsumed/document->decrypt-seekable]' => [
+                'wf/seekable-preconsumed/document->decrypt-seekable',
+                MediaType::DOCUMENT,
+                'document-source-with-prefix',
+                'seekable',
+                7,
+                'seekable',
+                0,
+            ],
+            'DEBUG[wf/noseek-preconsumed/video->decrypt-noseek]' => [
+                'wf/noseek-preconsumed/video->decrypt-noseek',
+                MediaType::VIDEO,
+                'non-seekable-video-source',
+                'noseek',
+                4,
+                'noseek',
+                0,
+            ],
+            'DEBUG[wf/noseek-pristine/audio->decrypt-seekable]' => [
+                'wf/noseek-pristine/audio->decrypt-seekable',
+                MediaType::AUDIO,
+                "ID3\x00\x10\xFF\x00audio",
+                'noseek',
+                0,
+                'seekable',
+                0,
+            ],
         ];
     }
 
@@ -229,6 +334,21 @@ final class StreamFactoryTest extends TestCase
         rewind($resource);
 
         return new InstrumentedFactorySourceStream($resource);
+    }
+
+    private function buildSourceForScenario(string $contents, string $sourceKind, int $preConsumedBytes): Stream|NoSeekStream
+    {
+        $base = Utils::streamFor($contents);
+
+        if ($preConsumedBytes > 0) {
+            $base->read($preConsumedBytes);
+        }
+
+        return match ($sourceKind) {
+            'seekable' => $base,
+            'noseek' => new NoSeekStream($base),
+            default => throw new RuntimeException(sprintf('Unsupported source kind: %s', $sourceKind)),
+        };
     }
 }
 
