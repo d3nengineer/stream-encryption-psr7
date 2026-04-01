@@ -1,14 +1,16 @@
-# Stream encryption psr7
+# Stream Encryption PSR-7
 
-PSR-7 stream decorators for media encryption (AES-CBC + HKDF + HMAC).
+`d3nengineer/stream-encryption-psr7` is a PHP 8.2+ library that exposes lazy PSR-7 stream decorators for media encryption and decryption using AES-CBC, HKDF-SHA256, and HMAC-SHA256.
 
-## Recommended Entry Point: StreamFactory
+## Installation
 
-`Infra\StreamEncryption\Stream\StreamFactory` is the recommended ergonomic API for most consumers.
-It exposes one-line factory methods for encryption and decryption while still returning the same
-`EncryptingStream` and `DecryptingStream` decorators.
+```bash
+composer require d3nengineer/stream-encryption-psr7
+```
 
-### Usage
+## Recommended Entry Point
+
+Use `Infra\StreamEncryption\Stream\StreamFactory` for the common happy path. It creates lazy encrypting and decrypting decorators without changing the underlying stream behavior or exception model.
 
 ```php
 <?php
@@ -31,196 +33,26 @@ $decrypted = $factory->decrypt(
     $mediaKey,
     MediaType::IMAGE,
 );
+
+$plaintext = (string) $decrypted;
 ```
 
-### Optional Service Injection
+## Supported Runtime
 
-```php
-<?php
+- PHP 8.2+
+- `psr/http-message` ^1.0 or ^2.0
+- `guzzlehttp/psr7` ^2.0
 
-use Infra\StreamEncryption\Crypto\Decryptor;
-use Infra\StreamEncryption\Crypto\Encryptor;
-use Infra\StreamEncryption\Stream\StreamFactory;
+## Verification
 
-$factory = new StreamFactory(new Encryptor(), new Decryptor());
-```
-
-### Behavioral Notes
-
-- Factory methods are lazy and do not read source streams at construction time.
-- Factory methods do not add normalization, buffering, or exception wrapping.
-- Returned objects preserve the same lifecycle, source-consumption, exception, and memory tradeoffs documented for `EncryptingStream` and `DecryptingStream`.
-- Diagnostics stance is unchanged: explicit exceptions and focused tests over runtime logger coupling.
-
-### PSR-7 / Guzzle Compatibility Guarantees
-
-- Delegated PSR-7 methods (`read`, `getContents`, `seek`, `rewind`, `tell`, `eof`, `getSize`, `getMetadata`) are covered with compatibility-matrix tests for both encrypting and decrypting decorators.
-- Lazy materialization happens at first delegated read/delegation boundary and is reused for subsequent read cycles (`__toString()`, `read()`, `getContents()`, `rewind()` combinations).
-- Resource-backed Guzzle streams (`Utils::streamFor($resource)`) are supported and preserve seekable rewind semantics.
-- `NoSeekStream` interoperability is explicit:
-  - untouched cursor -> full payload compatibility;
-  - pre-consumed cursor -> remaining-bytes semantics (or integrity failure for decrypting when payload is incomplete).
-- `StreamFactory` entrypoints preserve the exact compatibility behavior of direct `EncryptingStream` / `DecryptingStream` usage.
-
-### Test Coverage Matrix
-
-- Primitive boundary vectors are data-provider driven for malformed payloads, tampered ciphertext/MAC, and media-key length constraints.
-- Stream decorator lifecycle coverage includes constructor guards, detached/closed/unreadable transitions, and seekable/non-seekable cursor semantics.
-- StreamFactory workflow parity includes scenario-matrix checks across media types, source types, and cursor pre-consumption permutations.
-
-Run the full suite:
+Run the same checks locally that the repository uses for release-readiness:
 
 ```bash
+composer validate --strict
+find src tests -name '*.php' -print0 | xargs -0 -n1 php -l
 vendor/bin/phpunit
 ```
 
-Run focused subsets:
+## More Details
 
-```bash
-vendor/bin/phpunit tests/AesCbcTest.php tests/HmacTest.php tests/MediaKeyExpanderTest.php tests/EncryptorDecryptorTest.php
-vendor/bin/phpunit tests/EncryptingStreamTest.php tests/DecryptingStreamTest.php tests/StreamFactoryTest.php
-```
-
-## EncryptingStream
-
-`Infra\StreamEncryption\Stream\EncryptingStream` lazily reads a source PSR-7 stream,
-encrypts the source bytes with `Encryptor`, and exposes encrypted bytes as a read-only PSR-7 stream.
-
-### Constructor
-
-```php
-new EncryptingStream(
-    StreamInterface $source,
-    string $mediaKey,
-    MediaType $mediaType,
-    Encryptor $encryptor = new Encryptor(),
-)
-```
-
-- `source`: plaintext source stream.
-- `mediaKey`: 32-byte media key used for HKDF expansion.
-- `mediaType`: media context (`IMAGE`, `VIDEO`, `AUDIO`, `DOCUMENT`).
-- `encryptor`: optional custom encryptor implementation.
-
-### Usage
-
-```php
-<?php
-
-use GuzzleHttp\Psr7\Utils;
-use Infra\StreamEncryption\Crypto\Decryptor;
-use Infra\StreamEncryption\Enum\MediaType;
-use Infra\StreamEncryption\Stream\EncryptingStream;
-
-$mediaKey = random_bytes(32);
-$plaintextSource = Utils::streamFor("binary\x00payload");
-
-$encryptingStream = new EncryptingStream(
-    $plaintextSource,
-    $mediaKey,
-    MediaType::IMAGE,
-);
-
-$payload = (string) $encryptingStream; // ciphertext || mac
-
-$decryptor = new Decryptor();
-$plaintext = $decryptor->decrypt($payload, $mediaKey, MediaType::IMAGE);
-```
-
-### Payload Format
-
-- Output bytes are `ciphertext || mac`.
-- The MAC is HMAC-SHA256 over ciphertext.
-- Decrypt with `Decryptor` using the same media key and media type.
-
-### Source Ownership And Lifecycle
-
-- `EncryptingStream` owns the source stream lifecycle.
-- Calling `close()` closes both the internal encrypted stream and the source stream.
-- Calling `detach()` detaches the internal encrypted stream resource (if initialized) and also detaches the source stream.
-- Repeated `close()`/`detach()` calls are safe and idempotent.
-
-### Source Consumption Contract
-
-- Seekable source: `EncryptingStream` rewinds and encrypts from the beginning.
-- Non-seekable source: `EncryptingStream` encrypts remaining bytes from the current cursor position.
-- Pre-consumed non-seekable sources can produce an encrypted payload of an empty plaintext.
-
-### Memory Tradeoff
-
-- Encryption materializes the full encrypted payload in memory once and reuses it for subsequent reads.
-- For very large payloads, account for full-buffer memory usage.
-
-## DecryptingStream
-
-`Infra\StreamEncryption\Stream\DecryptingStream` lazily reads an encrypted PSR-7 stream,
-authenticates and decrypts the payload with `Decryptor`, and exposes plaintext bytes as a read-only PSR-7 stream.
-
-### Constructor
-
-```php
-new DecryptingStream(
-    StreamInterface $source,
-    string $mediaKey,
-    MediaType $mediaType,
-    Decryptor $decryptor = new Decryptor(),
-)
-```
-
-- `source`: encrypted payload stream containing `ciphertext || mac`.
-- `mediaKey`: 32-byte media key used for HKDF expansion.
-- `mediaType`: media context (`IMAGE`, `VIDEO`, `AUDIO`, `DOCUMENT`).
-- `decryptor`: optional custom decryptor implementation.
-
-### Usage
-
-```php
-<?php
-
-use GuzzleHttp\Psr7\Utils;
-use Infra\StreamEncryption\Crypto\Encryptor;
-use Infra\StreamEncryption\Enum\MediaType;
-use Infra\StreamEncryption\Stream\DecryptingStream;
-
-$mediaKey = random_bytes(32);
-$encryptor = new Encryptor();
-$result = $encryptor->encrypt("binary\x00payload", $mediaKey, MediaType::IMAGE);
-
-$decryptingStream = new DecryptingStream(
-    Utils::streamFor($result->payload),
-    $mediaKey,
-    MediaType::IMAGE,
-);
-
-$plaintext = (string) $decryptingStream;
-```
-
-### Payload Format And Validation
-
-- Input bytes must be `ciphertext || mac`.
-- Integrity verification happens before decryption.
-- Media key and media type must match the payload that produced the ciphertext.
-- Crypto-layer exceptions are propagated unchanged so integrity and key failures stay explicit.
-
-### Source Ownership And Lifecycle
-
-- `DecryptingStream` owns the encrypted source stream lifecycle.
-- Calling `close()` closes both the internal plaintext stream and the encrypted source stream.
-- Calling `detach()` detaches the internal plaintext resource (if initialized) and also detaches the source stream.
-- Repeated `close()`/`detach()` calls are safe and idempotent.
-
-### Source Consumption Contract
-
-- Seekable source: `DecryptingStream` rewinds and decrypts from the beginning.
-- Non-seekable source: `DecryptingStream` decrypts remaining bytes from the current cursor position.
-- Pre-consumed or truncated non-seekable payloads can fail integrity validation because the full `ciphertext || mac` payload is no longer available.
-
-### Memory Tradeoff
-
-- Decryption materializes the full plaintext in memory once and reuses it for subsequent reads.
-- For very large payloads, account for full-buffer memory usage.
-
-### Diagnostics Stance
-
-- The library favors transparent exceptions and focused PHPUnit coverage over runtime logger coupling.
-- Constructor guards, source-read boundaries, and crypto failures remain explicit so diagnostics can be added later without changing control flow.
+Package behavior and operational guarantees that do not belong on the landing page live in [docs/usage.md](docs/usage.md).
