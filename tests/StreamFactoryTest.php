@@ -175,33 +175,6 @@ final class StreamFactoryTest extends TestCase
         $this->assertSame($plaintext, $decrypted);
     }
 
-    public function testFactoryDecryptRemainsCompatibleWithUntouchedNoSeekSources(): void
-    {
-        $mediaKey = random_bytes(32);
-        $plaintext = 'factory-noseek-decrypt';
-        $payload = (new Encryptor())->encrypt($plaintext, $mediaKey, MediaType::AUDIO)->payload;
-        $source = new NoSeekStream(Utils::streamFor($payload));
-        $factory = new StreamFactory();
-
-        $decrypted = $factory->decrypt($source, $mediaKey, MediaType::AUDIO);
-
-        $this->assertSame($plaintext, (string) $decrypted);
-    }
-
-    public function testFactoryEncryptHonorsNoSeekRemainingBytesSemantics(): void
-    {
-        $mediaKey = random_bytes(32);
-        $base = Utils::streamFor('factory-noseek-remaining');
-        $base->read(8);
-        $source = new NoSeekStream($base);
-        $factory = new StreamFactory();
-
-        $encrypted = $factory->encrypt($source, $mediaKey, MediaType::VIDEO);
-        $decrypted = (new Decryptor())->decrypt((string) $encrypted, $mediaKey, MediaType::VIDEO);
-
-        $this->assertSame('noseek-remaining', $decrypted);
-    }
-
     #[DataProvider('factoryWorkflowParityProvider')]
     public function testFactoryWorkflowParityAcrossSourceAndCursorPermutations(
         string $scenarioId,

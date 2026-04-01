@@ -70,38 +70,6 @@ final class DecryptingStreamTest extends TestCase
         $this->assertSame($plaintext, (string) $stream);
     }
 
-    public function testItDelegatesReadSeekTellEofAndContentsToTheInternalPlaintextStream(): void
-    {
-        $mediaKey = random_bytes(32);
-        $plaintext = 'delegation-content';
-        $stream = new DecryptingStream(
-            Utils::streamFor($this->encrypt($plaintext, $mediaKey, MediaType::AUDIO)),
-            $mediaKey,
-            MediaType::AUDIO,
-        );
-
-        $this->assertTrue($stream->isReadable());
-        $this->assertTrue($stream->isSeekable());
-        $this->assertSame(0, $stream->tell());
-
-        $first = $stream->read(8);
-
-        $this->assertSame(substr($plaintext, 0, 8), $first);
-        $this->assertSame(8, $stream->tell());
-
-        $stream->seek(0);
-
-        $this->assertSame(0, $stream->tell());
-        $this->assertSame($plaintext, $stream->getContents());
-        $this->assertTrue($stream->eof());
-
-        $stream->rewind();
-
-        $this->assertFalse($stream->eof());
-        $this->assertSame(strlen($plaintext), $stream->getSize());
-        $this->assertIsArray($stream->getMetadata());
-    }
-
     public function testCompatibilityMatrixForDelegatedMethodsInitializesOnceAndStaysStable(): void
     {
         $mediaKey = random_bytes(32);
@@ -365,58 +333,6 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
-    public function testItPropagatesTruncatedPayloadIntegrityFailures(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::AUDIO);
-        $stream = new DecryptingStream(
-            Utils::streamFor(substr($payload, 0, -1)),
-            $mediaKey,
-            MediaType::AUDIO,
-        );
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
-    public function testItPropagatesTamperedCiphertextIntegrityFailures(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::IMAGE);
-        $payload[0] = $payload[0] ^ "\x01";
-        $stream = new DecryptingStream(Utils::streamFor($payload), $mediaKey, MediaType::IMAGE);
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
-    public function testItPropagatesTamperedCiphertextIntegrityFailuresForNoSeekSource(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::IMAGE);
-        $payload[0] = $payload[0] ^ "\x01";
-        $source = new NoSeekStream(Utils::streamFor($payload));
-        $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
-    public function testItPropagatesTamperedMacIntegrityFailures(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('secret', $mediaKey, MediaType::VIDEO);
-        $payload[strlen($payload) - 1] = $payload[strlen($payload) - 1] ^ "\x01";
-        $stream = new DecryptingStream(Utils::streamFor($payload), $mediaKey, MediaType::VIDEO);
-
-        $this->expectException(IntegrityException::class);
-
-        $stream->read(1);
-    }
-
     public function testItPropagatesWrongMediaKeyFailures(): void
     {
         $payload = $this->encrypt('secret', random_bytes(32), MediaType::DOCUMENT);
@@ -440,7 +356,6 @@ final class DecryptingStreamTest extends TestCase
 
     #[DataProvider('tamperMatrixProvider')]
     public function testTamperMatrixFailsIntegrityBeforeDecrypt(
-        string $scenarioId,
         MediaType $mediaType,
         string $sourceKind,
         string $mutationVector,
@@ -451,27 +366,8 @@ final class DecryptingStreamTest extends TestCase
         $source = $this->buildSourceByKind($tamperedPayload, $sourceKind);
         $stream = new DecryptingStream($source, $mediaKey, $mediaType);
 
-        try {
-            $stream->read(1);
-            $this->fail(sprintf(
-                'ERROR[%s]: expected IntegrityException before decrypt boundary for vector %s on %s source.',
-                $scenarioId,
-                $mutationVector,
-                $sourceKind,
-            ));
-        } catch (IntegrityException) {
-            $this->assertTrue(true, sprintf(
-                'INFO[%s]: integrity failure triggered before decrypt as expected.',
-                $scenarioId,
-            ));
-        } catch (\Throwable $exception) {
-            $this->fail(sprintf(
-                'ERROR[%s]: expected IntegrityException, got %s (%s).',
-                $scenarioId,
-                $exception::class,
-                $exception->getMessage(),
-            ));
-        }
+        $this->expectException(IntegrityException::class);
+        $stream->read(1);
     }
 
     public function testItPropagatesInvalidMediaKeyExceptionsFromTheCryptoLayer(): void
@@ -501,7 +397,6 @@ final class DecryptingStreamTest extends TestCase
 
     public function testReadAfterCloseFailsWhenSourceBecomesUnreadable(): void
     {
-        $scenarioId = 'decrypt-lifecycle/closed-before-read/document';
         $mediaKey = random_bytes(32);
         $payload = $this->encrypt('closed-before-read', $mediaKey, MediaType::DOCUMENT);
         $source = $this->createInstrumentedSourceStream($payload);
@@ -552,37 +447,32 @@ final class DecryptingStreamTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: MediaType, 2: string, 3: string}>
+     * @return array<string, array{0: MediaType, 1: string, 2: string}>
      */
     public static function tamperMatrixProvider(): array
     {
         return [
             'DEBUG[tamper-stream/image-seekable-first-byte]' => [
-                'tamper-stream/image-seekable-first-byte',
                 MediaType::IMAGE,
                 'seekable-untouched',
                 'flip_first_byte',
             ],
             'DEBUG[tamper-stream/video-seekable-middle-byte]' => [
-                'tamper-stream/video-seekable-middle-byte',
                 MediaType::VIDEO,
                 'seekable-untouched',
                 'flip_middle_byte',
             ],
             'DEBUG[tamper-stream/audio-noseek-untouched-mac-swap]' => [
-                'tamper-stream/audio-noseek-untouched-mac-swap',
                 MediaType::AUDIO,
                 'noseek-untouched',
                 'swap_mac_halves',
             ],
             'DEBUG[tamper-stream/document-noseek-prefix-truncation]' => [
-                'tamper-stream/document-noseek-prefix-truncation',
                 MediaType::DOCUMENT,
                 'noseek-untouched',
                 'truncate_prefix',
             ],
             'DEBUG[tamper-stream/image-noseek-suffix-truncation]' => [
-                'tamper-stream/image-noseek-suffix-truncation',
                 MediaType::IMAGE,
                 'noseek-untouched',
                 'truncate_suffix',

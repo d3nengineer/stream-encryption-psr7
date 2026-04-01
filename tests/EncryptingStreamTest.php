@@ -61,34 +61,6 @@ final class EncryptingStreamTest extends TestCase
         $this->assertSame($expected->ciphertext . $expected->mac, (string) $stream);
     }
 
-    public function testItDelegatesReadSeekTellEofAndContentsToTheInternalPayloadStream(): void
-    {
-        $stream = new EncryptingStream(Utils::streamFor('delegation-content'), random_bytes(32), MediaType::AUDIO);
-
-        $this->assertTrue($stream->isReadable());
-        $this->assertTrue($stream->isSeekable());
-        $this->assertSame(0, $stream->tell());
-
-        $first = $stream->read(8);
-
-        $this->assertSame(8, strlen($first));
-        $this->assertSame(8, $stream->tell());
-
-        $stream->seek(0);
-
-        $this->assertSame(0, $stream->tell());
-
-        $payload = $stream->getContents();
-
-        $this->assertNotSame('', $payload);
-        $this->assertTrue($stream->eof());
-
-        $stream->rewind();
-
-        $this->assertFalse($stream->eof());
-        $this->assertNotNull($stream->getSize());
-    }
-
     public function testCompatibilityMatrixForDelegatedMethodsInitializesOnceAndStaysStable(): void
     {
         $source = $this->createInstrumentedSourceStream('compatibility-matrix-payload');

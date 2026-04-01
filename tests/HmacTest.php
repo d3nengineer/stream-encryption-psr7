@@ -21,7 +21,6 @@ final class HmacTest extends TestCase
         $this->assertSame(32, strlen($mac));
 
         $hmac->verify($ciphertext, $mac, $macKey);
-        $this->assertTrue(true);
     }
 
     public function testItFailsForTamperedCiphertext(): void

@@ -51,21 +51,8 @@ final class EncryptorDecryptorTest extends TestCase
         $decryptor->decrypt($result->payload, random_bytes(32), MediaType::DOCUMENT);
     }
 
-    public function testItFailsForTruncatedPayloads(): void
-    {
-        $encryptor = new Encryptor();
-        $decryptor = new Decryptor();
-        $mediaKey = random_bytes(32);
-        $result = $encryptor->encrypt('secret', $mediaKey, MediaType::AUDIO);
-
-        $this->expectException(IntegrityException::class);
-
-        $decryptor->decrypt(substr($result->payload, 0, -1), $mediaKey, MediaType::AUDIO);
-    }
-
     #[DataProvider('invalidPayloadBoundaryProvider')]
     public function testItFailsForMalformedPayloadBoundaries(
-        string $scenarioId,
         string $payload,
         MediaType $mediaType,
     ): void {
@@ -76,37 +63,8 @@ final class EncryptorDecryptorTest extends TestCase
         $decryptor->decrypt($payload, random_bytes(32), $mediaType);
     }
 
-    public function testItFailsForTamperedCiphertext(): void
-    {
-        $encryptor = new Encryptor();
-        $decryptor = new Decryptor();
-        $mediaKey = random_bytes(32);
-        $result = $encryptor->encrypt('secret', $mediaKey, MediaType::IMAGE);
-        $tamperedPayload = $result->payload;
-        $tamperedPayload[0] = $tamperedPayload[0] ^ "\x01";
-
-        $this->expectException(IntegrityException::class);
-
-        $decryptor->decrypt($tamperedPayload, $mediaKey, MediaType::IMAGE);
-    }
-
-    public function testItFailsForTamperedMac(): void
-    {
-        $encryptor = new Encryptor();
-        $decryptor = new Decryptor();
-        $mediaKey = random_bytes(32);
-        $result = $encryptor->encrypt('secret', $mediaKey, MediaType::VIDEO);
-        $tamperedPayload = $result->payload;
-        $tamperedPayload[strlen($tamperedPayload) - 1] = $tamperedPayload[strlen($tamperedPayload) - 1] ^ "\x01";
-
-        $this->expectException(IntegrityException::class);
-
-        $decryptor->decrypt($tamperedPayload, $mediaKey, MediaType::VIDEO);
-    }
-
     #[DataProvider('tamperVectorProvider')]
     public function testItFailsForDeterministicTamperVectors(
-        string $scenarioId,
         MediaType $mediaType,
         string $mutation,
     ): void {
@@ -135,7 +93,6 @@ final class EncryptorDecryptorTest extends TestCase
 
     #[DataProvider('invalidMediaKeyProvider')]
     public function testItRejectsInvalidMediaKeyLengthsAtPublicBoundaries(
-        string $scenarioId,
         string $invalidMediaKey,
     ): void {
         $encryptor = new Encryptor();
@@ -161,19 +118,17 @@ final class EncryptorDecryptorTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: string, 2: MediaType}>
+     * @return array<string, array{0: string, 1: MediaType}>
      */
     public static function invalidPayloadBoundaryProvider(): array
     {
         return [
-            'DEBUG[payload-invalid/empty/image]' => ['payload-invalid/empty/image', '', MediaType::IMAGE],
+            'DEBUG[payload-invalid/empty/image]' => ['', MediaType::IMAGE],
             'DEBUG[payload-invalid/mac-only-32/video]' => [
-                'payload-invalid/mac-only-32/video',
                 random_bytes(32),
                 MediaType::VIDEO,
             ],
             'DEBUG[payload-invalid/short-31/audio]' => [
-                'payload-invalid/short-31/audio',
                 random_bytes(31),
                 MediaType::AUDIO,
             ],
@@ -181,27 +136,27 @@ final class EncryptorDecryptorTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: MediaType, 2: string}>
+     * @return array<string, array{0: MediaType, 1: string}>
      */
     public static function tamperVectorProvider(): array
     {
         return [
-            'DEBUG[tamper/cipher-first-byte/image]' => ['tamper/cipher-first-byte/image', MediaType::IMAGE, 'flip_first_byte'],
-            'DEBUG[tamper/cipher-middle-byte/video]' => ['tamper/cipher-middle-byte/video', MediaType::VIDEO, 'flip_middle_byte'],
-            'DEBUG[tamper/payload-prefix-truncation/audio]' => ['tamper/payload-prefix-truncation/audio', MediaType::AUDIO, 'truncate_prefix'],
-            'DEBUG[tamper/payload-suffix-truncation/document]' => ['tamper/payload-suffix-truncation/document', MediaType::DOCUMENT, 'truncate_suffix'],
-            'DEBUG[tamper/mac-segment-swap/image]' => ['tamper/mac-segment-swap/image', MediaType::IMAGE, 'swap_mac_halves'],
+            'DEBUG[tamper/cipher-first-byte/image]' => [MediaType::IMAGE, 'flip_first_byte'],
+            'DEBUG[tamper/cipher-middle-byte/video]' => [MediaType::VIDEO, 'flip_middle_byte'],
+            'DEBUG[tamper/payload-prefix-truncation/audio]' => [MediaType::AUDIO, 'truncate_prefix'],
+            'DEBUG[tamper/payload-suffix-truncation/document]' => [MediaType::DOCUMENT, 'truncate_suffix'],
+            'DEBUG[tamper/mac-segment-swap/image]' => [MediaType::IMAGE, 'swap_mac_halves'],
         ];
     }
 
     /**
-     * @return array<string, array{0: string, 1: string}>
+     * @return array<string, array{0: string}>
      */
     public static function invalidMediaKeyProvider(): array
     {
         return [
-            'DEBUG[key-invalid/short-31]' => ['key-invalid/short-31', random_bytes(31)],
-            'DEBUG[key-invalid/long-33]' => ['key-invalid/long-33', random_bytes(33)],
+            'DEBUG[key-invalid/short-31]' => [random_bytes(31)],
+            'DEBUG[key-invalid/long-33]' => [random_bytes(33)],
         ];
     }
 
