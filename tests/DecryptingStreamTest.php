@@ -13,6 +13,7 @@ use Infra\StreamEncryption\Exception\IntegrityException;
 use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
 use Infra\StreamEncryption\Stream\DecryptingStream;
 use Infra\StreamEncryption\Stream\EncryptingStream;
+use Infra\StreamEncryption\Tests\Support\InstrumentedTestStream;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -380,42 +381,21 @@ final class DecryptingStreamTest extends TestCase
         $stream->read(1);
     }
 
-    public function testReadAfterDetachFailsWhenEncryptedSourceIsNoLongerReadable(): void
+    #[DataProvider('unreadableSourceActionProvider')]
+    public function testReadFailsWhenSourceBecomesUnreadableBeforeFirstRead(string $action): void
     {
         $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('detach-lifecycle-check', $mediaKey, MediaType::IMAGE);
-        $source = $this->createInstrumentedSourceStream($payload);
+        $payload = $this->encrypt($action, $mediaKey, MediaType::IMAGE);
+        $source = $action === 'external-detach'
+            ? Utils::streamFor($payload)
+            : $this->createInstrumentedSourceStream($payload);
         $stream = new DecryptingStream($source, $mediaKey, MediaType::IMAGE);
 
-        $stream->detach();
-
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Source stream is not readable.');
-
-        $stream->read(1);
-    }
-
-    public function testReadAfterCloseFailsWhenSourceBecomesUnreadable(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('closed-before-read', $mediaKey, MediaType::DOCUMENT);
-        $source = $this->createInstrumentedSourceStream($payload);
-        $stream = new DecryptingStream($source, $mediaKey, MediaType::DOCUMENT);
-        $stream->close();
-
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Source stream is not readable.');
-
-        $stream->read(1);
-    }
-
-    public function testReadFailsWhenSourceIsDetachedExternallyAfterConstruction(): void
-    {
-        $mediaKey = random_bytes(32);
-        $payload = $this->encrypt('detached-after-construction', $mediaKey, MediaType::AUDIO);
-        $source = Utils::streamFor($payload);
-        $stream = new DecryptingStream($source, $mediaKey, MediaType::AUDIO);
-        $source->detach();
+        match ($action) {
+            'detach-lifecycle-check' => $stream->detach(),
+            'closed-before-read' => $stream->close(),
+            'external-detach' => $source->detach(),
+        };
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Source stream is not readable.');
@@ -480,6 +460,18 @@ final class DecryptingStreamTest extends TestCase
         ];
     }
 
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unreadableSourceActionProvider(): array
+    {
+        return [
+            'owned-source-detached' => ['detach-lifecycle-check'],
+            'owned-source-closed' => ['closed-before-read'],
+            'externally-detached' => ['external-detach'],
+        ];
+    }
+
     private function buildSourceByKind(string $payload, string $sourceKind): Stream|\GuzzleHttp\Psr7\NoSeekStream
     {
         $base = Utils::streamFor($payload);
@@ -524,58 +516,12 @@ final class DecryptingStreamTest extends TestCase
         return (new Encryptor())->encrypt($plaintext, $mediaKey, $mediaType)->payload;
     }
 
-    private function createInstrumentedSourceStream(string $contents): InstrumentedDecryptSourceStream
+    private function createInstrumentedSourceStream(string $contents): InstrumentedTestStream
     {
         $resource = fopen('php://temp', 'r+');
         fwrite($resource, $contents);
         rewind($resource);
 
-        return new InstrumentedDecryptSourceStream($resource);
-    }
-}
-
-final class InstrumentedDecryptSourceStream extends Stream
-{
-    public bool $closeCalled = false;
-    public int $detachCalls = 0;
-    public int $rewindCalls = 0;
-    public int $getContentsCalls = 0;
-    public bool $failOnRewind = false;
-    public bool $failOnGetContents = false;
-
-    public function close(): void
-    {
-        $this->closeCalled = true;
-
-        parent::close();
-    }
-
-    public function detach()
-    {
-        $this->detachCalls++;
-
-        return parent::detach();
-    }
-
-    public function rewind(): void
-    {
-        $this->rewindCalls++;
-
-        if ($this->failOnRewind) {
-            throw new RuntimeException('rewind failure');
-        }
-
-        parent::rewind();
-    }
-
-    public function getContents(): string
-    {
-        $this->getContentsCalls++;
-
-        if ($this->failOnGetContents) {
-            throw new RuntimeException('getContents failure');
-        }
-
-        return parent::getContents();
+        return new InstrumentedTestStream($resource);
     }
 }

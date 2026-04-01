@@ -15,6 +15,7 @@ use Infra\StreamEncryption\Exception\InvalidMediaKeyException;
 use Infra\StreamEncryption\Stream\DecryptingStream;
 use Infra\StreamEncryption\Stream\EncryptingStream;
 use Infra\StreamEncryption\Stream\StreamFactory;
+use Infra\StreamEncryption\Tests\Support\InstrumentedTestStream;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
@@ -177,7 +178,6 @@ final class StreamFactoryTest extends TestCase
 
     #[DataProvider('factoryWorkflowParityProvider')]
     public function testFactoryWorkflowParityAcrossSourceAndCursorPermutations(
-        string $scenarioId,
         MediaType $mediaType,
         string $plaintext,
         string $encryptionSourceKind,
@@ -203,12 +203,6 @@ final class StreamFactoryTest extends TestCase
         $this->assertSame(
             $decryptor->decrypt($directEncryptedPayload, $mediaKey, $mediaType),
             $decryptor->decrypt($factoryEncryptedPayload, $mediaKey, $mediaType),
-            sprintf(
-                'INFO[%s]: factory encrypt parity with direct decorator should hold for source kind %s at pre-consumed offset %d.',
-                $scenarioId,
-                $encryptionSourceKind,
-                $encryptionPreConsumedBytes,
-            ),
         );
 
         $payload = (new Encryptor())->encrypt($plaintext, $mediaKey, $mediaType)->payload;
@@ -226,12 +220,6 @@ final class StreamFactoryTest extends TestCase
         $this->assertSame(
             $directDecryptedPlaintext,
             $factoryDecryptedPlaintext,
-            sprintf(
-                'INFO[%s]: factory decrypt parity with direct decorator should hold for source kind %s at pre-consumed offset %d.',
-                $scenarioId,
-                $decryptionSourceKind,
-                $decryptionPreConsumedBytes,
-            ),
         );
     }
 
@@ -249,13 +237,12 @@ final class StreamFactoryTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: string, 1: MediaType, 2: string, 3: string, 4: int, 5: string, 6: int}>
+     * @return array<string, array{0: MediaType, 1: string, 2: string, 3: int, 4: string, 5: int}>
      */
     public static function factoryWorkflowParityProvider(): array
     {
         return [
-            'DEBUG[wf/seekable-pristine/image->decrypt-seekable]' => [
-                'wf/seekable-pristine/image->decrypt-seekable',
+            'seekable-pristine-image-to-seekable' => [
                 MediaType::IMAGE,
                 "binary\x00image\x01payload",
                 'seekable',
@@ -263,8 +250,7 @@ final class StreamFactoryTest extends TestCase
                 'seekable',
                 0,
             ],
-            'DEBUG[wf/seekable-preconsumed/document->decrypt-seekable]' => [
-                'wf/seekable-preconsumed/document->decrypt-seekable',
+            'seekable-preconsumed-document-to-seekable' => [
                 MediaType::DOCUMENT,
                 'document-source-with-prefix',
                 'seekable',
@@ -272,8 +258,7 @@ final class StreamFactoryTest extends TestCase
                 'seekable',
                 0,
             ],
-            'DEBUG[wf/noseek-preconsumed/video->decrypt-noseek]' => [
-                'wf/noseek-preconsumed/video->decrypt-noseek',
+            'noseek-preconsumed-video-to-noseek' => [
                 MediaType::VIDEO,
                 'non-seekable-video-source',
                 'noseek',
@@ -281,8 +266,7 @@ final class StreamFactoryTest extends TestCase
                 'noseek',
                 0,
             ],
-            'DEBUG[wf/noseek-pristine/audio->decrypt-seekable]' => [
-                'wf/noseek-pristine/audio->decrypt-seekable',
+            'noseek-pristine-audio-to-seekable' => [
                 MediaType::AUDIO,
                 "ID3\x00\x10\xFF\x00audio",
                 'noseek',
@@ -300,13 +284,13 @@ final class StreamFactoryTest extends TestCase
         return $property->getValue($object);
     }
 
-    private function createInstrumentedStream(string $contents): InstrumentedFactorySourceStream
+    private function createInstrumentedStream(string $contents): InstrumentedTestStream
     {
         $resource = fopen('php://temp', 'r+');
         fwrite($resource, $contents);
         rewind($resource);
 
-        return new InstrumentedFactorySourceStream($resource);
+        return new InstrumentedTestStream($resource);
     }
 
     private function buildSourceForScenario(string $contents, string $sourceKind, int $preConsumedBytes): Stream|NoSeekStream
@@ -322,35 +306,5 @@ final class StreamFactoryTest extends TestCase
             'noseek' => new NoSeekStream($base),
             default => throw new RuntimeException(sprintf('Unsupported source kind: %s', $sourceKind)),
         };
-    }
-}
-
-final class InstrumentedFactorySourceStream extends Stream
-{
-    public int $rewindCalls = 0;
-    public int $getContentsCalls = 0;
-    public bool $failOnRewind = false;
-    public bool $failOnGetContents = false;
-
-    public function rewind(): void
-    {
-        $this->rewindCalls++;
-
-        if ($this->failOnRewind) {
-            throw new RuntimeException('rewind failure');
-        }
-
-        parent::rewind();
-    }
-
-    public function getContents(): string
-    {
-        $this->getContentsCalls++;
-
-        if ($this->failOnGetContents) {
-            throw new RuntimeException('getContents failure');
-        }
-
-        return parent::getContents();
     }
 }
